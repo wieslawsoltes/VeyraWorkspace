@@ -14,21 +14,32 @@ concurrency:
 
 jobs:
   build:
-    if: github.event_name == 'workflow_dispatch' || !startsWith(github.event.head_commit.message, 'chore: bootstrap')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Verify original release checksums
+        run: sha256sum --check --strict MANIFEST.sha256
       - name: Validate source
         run: npm run check
       - name: Run core and server tests
         run: npm test
       - name: Build static client
         run: npm run build
-      - name: Disable Jekyll processing
-        run: touch dist/.nojekyll
+      - name: Add deployment provenance and disable Jekyll
+        run: |
+          touch dist/.nojekyll
+          node --input-type=module <<'JS'
+          import { writeFileSync } from 'node:fs';
+          writeFileSync('dist/build-info.json', JSON.stringify({
+            application: 'Veyra Workspace',
+            commit: process.env.GITHUB_SHA,
+            repository: process.env.GITHUB_REPOSITORY,
+            runId: process.env.GITHUB_RUN_ID
+          }, null, 2) + '\n');
+          JS
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
@@ -48,3 +59,20 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+      - name: Verify published version and entry points
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            if curl --fail --silent --show-error --location "${PAGE_URL}build-info.json?rev=${GITHUB_SHA}" -o "$RUNNER_TEMP/build-info.json" && \
+               node -e 'const fs = require("node:fs"); const info = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/build-info.json", "utf8")); if (info.commit !== process.env.GITHUB_SHA) process.exit(1);'; then
+              break
+            fi
+            if [ "$attempt" = 12 ]; then exit 1; fi
+            sleep 5
+          done
+          for asset in '' app.js styles.css auth.html; do
+            curl --fail --silent --show-error --location --retry 3 "${PAGE_URL}${asset}" -o /dev/null
+          done
+          printf 'Published and HTTP-verified: %s\nCommit: %s\n' "$PAGE_URL" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
