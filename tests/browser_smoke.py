@@ -75,8 +75,13 @@ async def main():
     assert received>0
    for target in [page,peer]:
     await target.evaluate('window.__testCall.leave()')
+    await target.evaluate('window.__testProvider.dispose()')
+   await peer.close()
+   await page.bring_to_front()
+   await wait_until(page,'document.visibilityState==="visible"')
    report['checks'].append('Actual WebRTC inbound RTP bytes in both directions')
    await page.set_viewport_size({'width':390,'height':844});await page.locator('#rail [data-action=nav][data-value=chat]').click()
+   await expect(page.locator('#composer-input')).to_be_visible()
    assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth')
    await page.screenshot(path=str(output/'mobile.png'));report['checks'].append('Responsive mobile width')
    report['passed']=not report['errors']
