@@ -10,6 +10,8 @@ import { uid, error, identifier, validText, validateMessage, toggleReaction, nor
 import { callState } from '../public/core/call-state.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// Read release metadata once; health checks must not drift from the package version.
+const { version: VERSION } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const scrypt = promisify(scryptCallback);
 const SESSION_MS = 7 * 86400000;
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -107,7 +109,7 @@ CREATE TABLE IF NOT EXISTS acs_users(userId TEXT PRIMARY KEY REFERENCES users(id
       if (req.headers.origin!==origin()) throw error('Request origin is not allowed. Set PUBLIC_ORIGIN to the exact browser origin.',403);
       rate(`write:${req.socket.remoteAddress}`,360);
     }
-    if(route==='/health'&&method==='GET') return json(res,200,{ok:true,service:'veyra',version:'1.0.0'});
+    if(route==='/health'&&method==='GET') return json(res,200,{ok:true,service:'veyra',version:VERSION});
     if(route==='/config'&&method==='GET') return json(res,200,{server:true,registrationEnabled:config.allowRegistration,clientId:config.clientId,tenantId:config.tenantId,acsEnabled:!!process.env.ACS_CONNECTION_STRING});
     if(['/auth/register','/auth/login'].includes(route)&&method==='POST') {
       rate(`auth:${req.socket.remoteAddress}`,30,15*60000);

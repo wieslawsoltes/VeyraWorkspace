@@ -72,6 +72,9 @@ async def run(base):
         async def setup(target):
             await target.locator('.conversation-header [data-action=start-call]').click()
             await target.locator('#call-join-form').wait_for()
+            await expect(target.get_by_role('dialog', name='Ready when you are', exact=True)).to_be_visible()
+            await expect(target.locator('#modal-title')).to_have_count(1)
+            assert await target.evaluate('window.veyraDiagnostics.version') == json.loads((ROOT / 'package.json').read_text())['version']
         async def joined(target):
             await target.wait_for_function('window.veyraDiagnostics.callState === "joined"')
             await expect(target.locator('#modal')).not_to_be_visible()

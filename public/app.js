@@ -25,12 +25,12 @@ function avatar(person,{large=false,small=false,presence=false,square=false}={})
 function roomAvatar(r,large=false){return r?.type==='direct'?avatar({name:r.name,color:r.color},{large}):`<span class="avatar square${large?' large':''}" style="background:${color(r?.color)}">${icon(r?.type==='channel'?'hash':r?.icon||'teams',large?24:18)}</span>`;}
 function ib(name,title,action,extra='',cls=''){return`<button type="button" class="icon-button ${cls}" title="${E(title)}" aria-label="${E(title)}" data-action="${action}" ${extra}>${icon(name,18)}</button>`;}
 function button(label,action,name='',cls='',extra=''){return`<button type="button" class="button ${cls}" data-action="${action}" ${extra}>${name?icon(name,16):''}${E(label)}</button>`;}
-function empty(title,text,name='chat',actions=''){return`<div class="empty-state"><div class="empty-symbol">${icon(name,28)}</div><h2 id="modal-title">${E(title)}</h2><p>${E(text)}</p>${actions?`<div class="row">${actions}</div>`:''}</div>`;}
+function empty(title,text,name='chat',actions=''){return`<div class="empty-state"><div class="empty-symbol">${icon(name,28)}</div><h2>${E(title)}</h2><p>${E(text)}</p>${actions?`<div class="row">${actions}</div>`:''}</div>`;}
 function toast(message,type='info'){
   const node=document.createElement('div');node.className=`toast ${type==='error'?'error':''}`;node.innerHTML=`${icon(type==='error'?'info':'check',16)}<span>${E(message)}</span>`;$('#toasts').append(node);setTimeout(()=>node.remove(),type==='error'?7500:4200);
 }
 function modal(title,body,subtitle='',footer=''){
-  clearDeviceDialog();hidePopover();const dlg=$('#modal');dlg.innerHTML=`<div class="modal-head"><div><h2>${E(title)}</h2>${subtitle?`<p>${E(subtitle)}</p>`:''}</div>${ib('close','Close dialog','close-modal')}</div><div class="modal-body">${body}</div>${footer?`<div class="modal-footer">${footer}</div>`:''}`;
+  clearDeviceDialog();hidePopover();const dlg=$('#modal');dlg.innerHTML=`<div class="modal-head"><div><h2 id="modal-title">${E(title)}</h2>${subtitle?`<p>${E(subtitle)}</p>`:''}</div>${ib('close','Close dialog','close-modal')}</div><div class="modal-body">${body}</div>${footer?`<div class="modal-footer">${footer}</div>`:''}`;
   dlg.setAttribute('aria-labelledby','modal-title');if(!dlg.open)dlg.showModal();
 }
 function formError(error){const form=$('#modal .modal-body');if(!form)return toast(error.message||error,'error');form.querySelector('.form-error')?.remove();const el=document.createElement('div');el.className='form-error';el.setAttribute('role','alert');el.textContent=error.message||String(error);form.prepend(el);}
