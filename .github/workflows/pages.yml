@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Verify original release checksums
+      - name: Verify release checksums
         run: sha256sum --check --strict MANIFEST.sha256
       - name: Validate source
         run: npm run check
@@ -72,7 +72,7 @@ jobs:
             if [ "$attempt" = 12 ]; then exit 1; fi
             sleep 5
           done
-          for asset in '' app.js styles.css auth.html; do
+          for asset in '' app.js styles.css auth.html core/media.js core/calls.js core/call-state.js ui/device-panel.js; do
             curl --fail --silent --show-error --location --retry 3 "${PAGE_URL}${asset}" -o /dev/null
           done
           printf 'Published and HTTP-verified: %s\nCommit: %s\n' "$PAGE_URL" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
