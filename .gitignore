@@ -1,0 +1,10 @@
+node_modules/
+data/
+dist/
+public/vendor/
+.env
+.env.*
+!.env.example
+*.log
+__pycache__/
+tests/output/

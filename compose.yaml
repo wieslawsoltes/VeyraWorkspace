@@ -1,0 +1,20 @@
+services:
+  veyra:
+    build:
+      context: .
+      args:
+        WITH_ACS_BROKER: "false"
+    ports:
+      - "127.0.0.1:4173:4173"
+    environment:
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:4173}
+      # Enable only for controlled onboarding; this example defaults closed.
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      ACS_CONNECTION_STRING: ${ACS_CONNECTION_STRING:-}
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_SECRET: ${TURN_SECRET:-}
+    volumes:
+      - workspace:/data
+    restart: unless-stopped
+volumes:
+  workspace:

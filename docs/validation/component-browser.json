@@ -1,0 +1,56 @@
+{
+  "mode": "component rendering with in-memory storage fixture",
+  "not_tested": [
+    "native IndexedDB persistence",
+    "browser network navigation",
+    "camera/microphone/screen capture",
+    "WebRTC media transport",
+    "WebGPU device execution",
+    "Microsoft live services"
+  ],
+  "checks": [
+    {
+      "name": "production UI boots with fixture storage",
+      "passed": true
+    },
+    {
+      "name": "composer sends and escapes HTML",
+      "passed": true
+    },
+    {
+      "name": "shared notes autosave",
+      "passed": true
+    },
+    {
+      "name": "Canvas whiteboard drawing and undo/redo",
+      "passed": true
+    },
+    {
+      "name": "calendar creates and displays events",
+      "passed": true
+    },
+    {
+      "name": "mobile layout and navigation",
+      "passed": true
+    }
+  ],
+  "errors": [],
+  "diagnostics": {
+    "version": "1.0.0",
+    "provider": "local",
+    "roomId": "product-design",
+    "messages": 8,
+    "loadedMessages": 15,
+    "renderer": "DOM",
+    "shapes": 0,
+    "renderedFrames": 0,
+    "vertexCount": 0,
+    "gpuUploads": 0,
+    "callPeers": 0,
+    "callState": "idle",
+    "rtcBytesReceived": 0,
+    "docVersion": 0,
+    "docDirty": false,
+    "docConflict": false
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "url": "http://localhost:4173",
+  "checks": [],
+  "errors": [],
+  "passed": false,
+  "failure": "Page.goto: net::ERR_BLOCKED_BY_ADMINISTRATOR at http://localhost:4173/\nCall log:\n  - navigating to \"http://localhost:4173/\", waiting until \"networkidle\"\n"
+}
