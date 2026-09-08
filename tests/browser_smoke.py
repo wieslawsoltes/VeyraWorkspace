@@ -6,7 +6,24 @@ A browser policy blocking navigation/media is a failure, not a passed test.
 """
 import asyncio,json,os,shutil
 from pathlib import Path
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, expect
+
+async def wait_until(page, expression, timeout=30000):
+ """Poll through the automation protocol without injecting an eval-based poller.
+
+ The server's production CSP remains enabled, including its unsafe-eval ban.
+ Predicate errors fail immediately; a pending evaluate is bounded by the deadline.
+ """
+ loop=asyncio.get_running_loop()
+ deadline=loop.time()+timeout/1000
+ while True:
+  remaining=deadline-loop.time()
+  if remaining<=0:
+   raise TimeoutError(f'Predicate did not become true within {timeout} ms: {expression}')
+  if await asyncio.wait_for(page.evaluate(expression),timeout=remaining):
+   return
+  await asyncio.sleep(min(0.1,max(0,deadline-loop.time())))
+
 async def main():
  base=os.environ.get('VEYRA_TEST_URL','http://localhost:4173')
  output=Path(__file__).parent/'output';output.mkdir(exist_ok=True)
@@ -22,13 +39,23 @@ async def main():
    await page.screenshot(path=str(output/'desktop.png'))
    message='Acceptance: saved through real IndexedDB <img src=x onerror="window.__xss=1">'
    await page.locator('#composer-input').fill(message);await page.locator('#composer-input').press('Enter')
-   await page.wait_for_function('document.querySelector("#message-feed").textContent.includes("Acceptance: saved")')
+   await wait_until(page,'document.querySelector("#message-feed").textContent.includes("Acceptance: saved")')
    assert await page.evaluate('window.__xss||0')==0
-   await page.reload(wait_until='networkidle');await page.wait_for_function('document.querySelector("#message-feed")?.textContent.includes("Acceptance: saved")')
+   await page.reload(wait_until='networkidle');await wait_until(page,'document.querySelector("#message-feed")?.textContent.includes("Acceptance: saved")')
    report['checks'].append('Native persistence across reload and HTML injection escaping')
-   await page.locator('.tabs [data-action=tab][data-value=notes]').click();await page.locator('#notes-editor').fill('Saved through native IndexedDB')
-   await page.wait_for_function('!window.veyraDiagnostics.docDirty&&window.veyraDiagnostics.docVersion>=2',timeout=6000)
-   report['checks'].append('Revisioned shared-editor persistence')
+   await page.locator('.tabs [data-action=tab][data-value=notes]').click()
+   # IndexedDB orders rooms by key. The initial room may have no seeded notes
+   # (revision zero), so await load and assert one committed revision increment.
+   await expect(page.locator('#doc-status')).to_contain_text('All changes saved')
+   revision=await page.evaluate('window.veyraDiagnostics.docVersion')
+   await page.locator('#notes-editor').fill('Saved through native IndexedDB')
+   await wait_until(page,f'!window.veyraDiagnostics.docDirty&&window.veyraDiagnostics.docVersion==={revision+1}',timeout=6000)
+   await page.reload(wait_until='networkidle');await page.locator('#composer-input').wait_for()
+   await page.locator('.tabs [data-action=tab][data-value=notes]').click()
+   await expect(page.locator('#doc-status')).to_contain_text('All changes saved')
+   await expect(page.locator('#notes-editor')).to_have_value('Saved through native IndexedDB')
+   assert await page.evaluate('window.veyraDiagnostics.docVersion')==revision+1
+   report['checks'].append('Revisioned shared-editor persistence across reload')
    await page.locator('.tabs [data-action=tab][data-value=board]').click();await page.wait_for_timeout(1000)
    report['renderer']=await page.evaluate('window.veyraDiagnostics.renderer')
    await page.screenshot(path=str(output/'whiteboard.png'))
@@ -39,21 +66,32 @@ async def main():
    script="""async()=>{const{LocalProvider}=await import('./core/storage.js');const{CallEngine}=await import('./core/calls.js');window.__testProvider=await new LocalProvider().init();window.__testCall=new CallEngine(window.__testProvider);await window.__testCall.join('product-design',{audio:true,video:true});}"""
    await page.evaluate(script);await peer.evaluate(script)
    for target in [page,peer]:
-    await target.wait_for_function('window.__testCall.peers.size===1&&[...window.__testCall.peers.values()].every(p=>p.pc.connectionState==="connected")',timeout=25000)
-    await target.wait_for_function('window.__testCall.local.getTracks().length>=1')
+    await wait_until(target,'window.__testCall.peers.size===1&&[...window.__testCall.peers.values()].every(p=>p.pc.connectionState==="connected")',timeout=25000)
+    await wait_until(target,'window.__testCall.local.getTracks().length>=1')
    report['checks'].append('Real RTCPeerConnection handshake with browser-generated synthetic media')
    await asyncio.sleep(2)
    for target in [page,peer]:
     received=await target.evaluate("""async()=>{let total=0;for(const p of window.__testCall.peers.values()){for(const r of(await p.pc.getStats()).values())if(r.type==='inbound-rtp')total+=r.bytesReceived||0;}return total;}""")
     assert received>0
+   for target in [page,peer]:
     await target.evaluate('window.__testCall.leave()')
+    await target.evaluate('window.__testProvider.dispose()')
+   await peer.close()
+   await page.bring_to_front()
+   await wait_until(page,'document.visibilityState==="visible"')
    report['checks'].append('Actual WebRTC inbound RTP bytes in both directions')
    await page.set_viewport_size({'width':390,'height':844});await page.locator('#rail [data-action=nav][data-value=chat]').click()
+   await expect(page.locator('#composer-input')).to_be_visible()
    assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth')
    await page.screenshot(path=str(output/'mobile.png'));report['checks'].append('Responsive mobile width')
    report['passed']=not report['errors']
   except Exception as e:
    report['passed']=False;report['failure']=str(e)
+   try:
+    report['diagnostics']=await page.evaluate('window.veyraDiagnostics')
+    await page.screenshot(path=str(output/'failure.png'))
+   except Exception:
+    pass  # Preserve the original failure even if the page has already closed.
   finally:
    await context.close();await browser.close();(output/'browser-results.json').write_text(json.dumps(report,indent=2));print(json.dumps(report,indent=2))
  return report['passed']

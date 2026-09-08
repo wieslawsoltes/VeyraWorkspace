@@ -2,6 +2,10 @@
 
 The generated TEST-RESULTS.md records the exit status and output of the source check, Node tests and static build performed when packaging this project. Inspect that report rather than assuming every supplied test has passed. Tests are executable and are included so the same checks can be repeated in your environment.
 
+## Version 1.1 validation additions
+
+The v1 packaging reports below remain historical evidence. Current PR checks rerun the core suite and add native-browser acceptance, rather than treating HTTP availability as evidence of working media. `tests/media.test.mjs` and `tests/calls.test.mjs` exercise device failures, permission cancellation races, generation fences, track replacement, screen-share restoration and sanitized call state using explicit unit-test doubles. `tests/browser_calls.py` serves the real static build under a Pages-like `/VeyraWorkspace/` path with native browser persistence, signaling and RTP; it uses Chromium synthetic devices and explicitly injected failure scenarios. GitHub Actions retains reports and screenshots for both success and failure. No physical iPhone capture or live Microsoft session is claimed from those tests.
+
 ## What each test proves
 
 - `tests/domain.test.mjs`: validation, safe text/URLs, attachment retry fingerprints, reaction behavior, calendar limits and geometry tessellation. Tessellation tests are not proof of a live GPU pipeline.

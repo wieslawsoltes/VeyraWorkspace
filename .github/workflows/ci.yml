@@ -10,6 +10,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - run: sha256sum --check --strict MANIFEST.sha256
       - run: npm run check
       - run: npm test
       - run: npm run build
@@ -17,3 +18,43 @@ jobs:
         with:
           name: veyra-static
           path: dist
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned browser test runner
+        run: |
+          python -m pip install playwright==1.55.0
+          python -m playwright install --with-deps chromium
+      - run: npm run build
+      - name: Native browser and project-subpath media acceptance
+        run: |
+          node --experimental-sqlite server/index.mjs > /tmp/veyra-browser-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            curl --fail --silent http://localhost:4173/api/health > /dev/null && break
+            sleep 1
+          done
+          set +e
+          python tests/browser_smoke.py
+          smoke=$?
+          python tests/browser_calls.py
+          calls=$?
+          test "$smoke" = 0 && test "$calls" = 0
+      - name: Preserve browser evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: veyra-browser-evidence
+          path: |
+            tests/output/
+            /tmp/veyra-browser-server.log
+          if-no-files-found: warn

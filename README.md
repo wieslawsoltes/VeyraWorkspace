@@ -4,6 +4,12 @@ An original, framework-free collaboration workspace with a familiar desktop comm
 
 **Veyra is not Microsoft Teams, is not endorsed by Microsoft, and is not a replacement implementation of Teams’ private protocols.** It contains original application code and UI, not extracted Microsoft application code or assets. Documented interoperability is separated from Veyra’s own communication system.
 
+## Version 1.1 — recoverable camera and microphone setup
+
+Pre-call device tests now include a real camera preview and local microphone level meter. Denied or missing devices leave setup open with independent Retry controls; a working microphone survives a camera failure. Preview tracks transfer into the call, and receive-only joining does not require capture permissions. Live device selection, camera flipping, interruption recovery, remote playback retry, participant pinning, safe diagnostics export, and format-correct self-recording are included.
+
+Read [Calling and device recovery](docs/CALLS.md) for iPhone permission guidance, the capture lifecycle, browser test scope, and the distinction between GitHub Pages local-tab calls and server-backed cross-device calls. Browser/OS permission denials cannot be overridden by JavaScript.
+
 ## Run immediately
 
 Install Node.js 22.16 or newer. The base app/server has no external runtime dependencies.

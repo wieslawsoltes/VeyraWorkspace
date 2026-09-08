@@ -7,7 +7,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { uid, error, identifier, validText, validateMessage, toggleReaction, normalizeEvent, validateDocument, messageFingerprint, MAX_FILE_SIZE, MAX_CALL_PEERS } from '../public/core/model.js';
 
+import { callState } from '../public/core/call-state.js';
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// Read release metadata once; health checks must not drift from the package version.
+const { version: VERSION } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const scrypt = promisify(scryptCallback);
 const SESSION_MS = 7 * 86400000;
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -105,7 +109,7 @@ CREATE TABLE IF NOT EXISTS acs_users(userId TEXT PRIMARY KEY REFERENCES users(id
       if (req.headers.origin!==origin()) throw error('Request origin is not allowed. Set PUBLIC_ORIGIN to the exact browser origin.',403);
       rate(`write:${req.socket.remoteAddress}`,360);
     }
-    if(route==='/health'&&method==='GET') return json(res,200,{ok:true,service:'veyra',version:'1.0.0'});
+    if(route==='/health'&&method==='GET') return json(res,200,{ok:true,service:'veyra',version:VERSION});
     if(route==='/config'&&method==='GET') return json(res,200,{server:true,registrationEnabled:config.allowRegistration,clientId:config.clientId,tenantId:config.tenantId,acsEnabled:!!process.env.ACS_CONNECTION_STRING});
     if(['/auth/register','/auth/login'].includes(route)&&method==='POST') {
       rate(`auth:${req.socket.remoteAddress}`,30,15*60000);
@@ -287,14 +291,14 @@ CREATE TABLE IF NOT EXISTS acs_users(userId TEXT PRIMARY KEY REFERENCES users(id
       if(input.type==='typing') {broadcast(payload,{roomId:input.roomId,exclude:input.peerId});return json(res,200,{ok:true});}
       if(input.type==='call-join') {
         if(client.callRoom&&client.callRoom!==input.roomId)throw error('Leave the current call first.',409);
-        const peers=[...clients].filter(([id,c])=>id!==input.peerId&&c.callRoom===input.roomId).map(([peerId,c])=>({peerId,userId:c.user.id,name:c.user.name}));
+        const peers=[...clients].filter(([id,c])=>id!==input.peerId&&c.callRoom===input.roomId).map(([peerId,c])=>({peerId,userId:c.user.id,name:c.user.name,...callState(c.callState)}));
         if(peers.length>=MAX_CALL_PEERS)throw error(`This mesh build supports at most ${MAX_CALL_PEERS} participants.`,409);
-        client.callRoom=input.roomId;broadcast(payload,{roomId:input.roomId,exclude:input.peerId});return json(res,200,{peers});
+        client.callRoom=input.roomId;client.callState=callState(input);Object.assign(payload,client.callState);broadcast(payload,{roomId:input.roomId,exclude:input.peerId});return json(res,200,{peers});
       }
       if(client.callRoom!==input.roomId)throw error('Join the call before sending call signals.',403);
-      if(input.type==='call-leave') {client.callRoom=null;broadcast(payload,{roomId:input.roomId,exclude:input.peerId});return json(res,200,{ok:true});}
+      if(input.type==='call-leave') {client.callRoom=null;client.callState=null;broadcast(payload,{roomId:input.roomId,exclude:input.peerId});return json(res,200,{ok:true});}
       if(input.type==='call-presence'||input.type==='call-state') {
-        if(input.type==='call-state')Object.assign(payload,{muted:!!input.muted,camera:!!input.camera,hand:!!input.hand,screen:!!input.screen});
+        client.callState=callState({...client.callState,...input});Object.assign(payload,client.callState);
         broadcast(payload,{roomId:input.roomId,exclude:input.peerId});return json(res,200,{ok:true});
       }
       if(input.type!=='rtc')throw error('Unknown signaling message.');
