@@ -1,0 +1,39 @@
+name: Restore verified media feature patch
+on:
+  push:
+    branches: [fix/mobile-media-and-calling]
+    paths: ['.feature-import/**', '.github/workflows/restore-media-patch.yml']
+permissions:
+  contents: write
+concurrency:
+  group: restore-veyra-media-patch
+  cancel-in-progress: false
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify and apply the complete saved source patch
+        run: |
+          set -euo pipefail
+          cat .feature-import/part00{0,1,2,3,4} | xz --decompress --stdout > "$RUNNER_TEMP/veyra-feature.patch"
+          echo "4478af5b7d02b68103f3085d57febd045289f83f8008213bea4b9b41be682bf7  $RUNNER_TEMP/veyra-feature.patch" | sha256sum --check --strict
+          git apply --check --exclude='.github/workflows/*' "$RUNNER_TEMP/veyra-feature.patch"
+          git apply --index --exclude='.github/workflows/*' "$RUNNER_TEMP/veyra-feature.patch"
+      - name: Validate implementation
+        run: |
+          npm run check
+          npm test
+          npm run build
+      - name: Commit source on the feature branch only
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/fix/mobile-media-and-calling
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: recover mobile media permissions and extend calling features'
+          git push origin HEAD:refs/heads/fix/mobile-media-and-calling
