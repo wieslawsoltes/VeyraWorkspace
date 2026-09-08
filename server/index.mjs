@@ -7,6 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { uid, error, identifier, validText, validateMessage, toggleReaction, normalizeEvent, validateDocument, messageFingerprint, MAX_FILE_SIZE, MAX_CALL_PEERS } from '../public/core/model.js';
 
+import { callState } from '../public/core/call-state.js';
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scrypt = promisify(scryptCallback);
 const SESSION_MS = 7 * 86400000;
@@ -287,14 +289,14 @@ CREATE TABLE IF NOT EXISTS acs_users(userId TEXT PRIMARY KEY REFERENCES users(id
       if(input.type==='typing') {broadcast(payload,{roomId:input.roomId,exclude:input.peerId});return json(res,200,{ok:true});}
       if(input.type==='call-join') {
         if(client.callRoom&&client.callRoom!==input.roomId)throw error('Leave the current call first.',409);
-        const peers=[...clients].filter(([id,c])=>id!==input.peerId&&c.callRoom===input.roomId).map(([peerId,c])=>({peerId,userId:c.user.id,name:c.user.name}));
+        const peers=[...clients].filter(([id,c])=>id!==input.peerId&&c.callRoom===input.roomId).map(([peerId,c])=>({peerId,userId:c.user.id,name:c.user.name,...callState(c.callState)}));
         if(peers.length>=MAX_CALL_PEERS)throw error(`This mesh build supports at most ${MAX_CALL_PEERS} participants.`,409);
-        client.callRoom=input.roomId;broadcast(payload,{roomId:input.roomId,exclude:input.peerId});return json(res,200,{peers});
+        client.callRoom=input.roomId;client.callState=callState(input);Object.assign(payload,client.callState);broadcast(payload,{roomId:input.roomId,exclude:input.peerId});return json(res,200,{peers});
       }
       if(client.callRoom!==input.roomId)throw error('Join the call before sending call signals.',403);
-      if(input.type==='call-leave') {client.callRoom=null;broadcast(payload,{roomId:input.roomId,exclude:input.peerId});return json(res,200,{ok:true});}
+      if(input.type==='call-leave') {client.callRoom=null;client.callState=null;broadcast(payload,{roomId:input.roomId,exclude:input.peerId});return json(res,200,{ok:true});}
       if(input.type==='call-presence'||input.type==='call-state') {
-        if(input.type==='call-state')Object.assign(payload,{muted:!!input.muted,camera:!!input.camera,hand:!!input.hand,screen:!!input.screen});
+        client.callState=callState({...client.callState,...input});Object.assign(payload,client.callState);
         broadcast(payload,{roomId:input.roomId,exclude:input.peerId});return json(res,200,{ok:true});
       }
       if(input.type!=='rtc')throw error('Unknown signaling message.');

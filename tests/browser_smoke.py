@@ -46,6 +46,7 @@ async def main():
    for target in [page,peer]:
     received=await target.evaluate("""async()=>{let total=0;for(const p of window.__testCall.peers.values()){for(const r of(await p.pc.getStats()).values())if(r.type==='inbound-rtp')total+=r.bytesReceived||0;}return total;}""")
     assert received>0
+   for target in [page,peer]:
     await target.evaluate('window.__testCall.leave()')
    report['checks'].append('Actual WebRTC inbound RTP bytes in both directions')
    await page.set_viewport_size({'width':390,'height':844});await page.locator('#rail [data-action=nav][data-value=chat]').click()

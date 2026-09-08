@@ -4,6 +4,8 @@ import {uid,escapeHTML as E,initials,markdown,relativeTime,fileSize,groupReactio
 import {Whiteboard} from './core/whiteboard.js';
 import {DocumentSession} from './core/documents.js';
 import {CallEngine} from './core/calls.js';
+import {MediaController,recordingOptions,recordingExtension} from './core/media.js';
+import {DevicePanel} from './ui/device-panel.js';
 import {readConfig,saveConfig} from './config.js';
 
 const $=selector=>document.querySelector(selector),$$=selector=>[...document.querySelectorAll(selector)];
@@ -23,13 +25,13 @@ function avatar(person,{large=false,small=false,presence=false,square=false}={})
 function roomAvatar(r,large=false){return r?.type==='direct'?avatar({name:r.name,color:r.color},{large}):`<span class="avatar square${large?' large':''}" style="background:${color(r?.color)}">${icon(r?.type==='channel'?'hash':r?.icon||'teams',large?24:18)}</span>`;}
 function ib(name,title,action,extra='',cls=''){return`<button type="button" class="icon-button ${cls}" title="${E(title)}" aria-label="${E(title)}" data-action="${action}" ${extra}>${icon(name,18)}</button>`;}
 function button(label,action,name='',cls='',extra=''){return`<button type="button" class="button ${cls}" data-action="${action}" ${extra}>${name?icon(name,16):''}${E(label)}</button>`;}
-function empty(title,text,name='chat',actions=''){return`<div class="empty-state"><div class="empty-symbol">${icon(name,28)}</div><h2>${E(title)}</h2><p>${E(text)}</p>${actions?`<div class="row">${actions}</div>`:''}</div>`;}
+function empty(title,text,name='chat',actions=''){return`<div class="empty-state"><div class="empty-symbol">${icon(name,28)}</div><h2 id="modal-title">${E(title)}</h2><p>${E(text)}</p>${actions?`<div class="row">${actions}</div>`:''}</div>`;}
 function toast(message,type='info'){
   const node=document.createElement('div');node.className=`toast ${type==='error'?'error':''}`;node.innerHTML=`${icon(type==='error'?'info':'check',16)}<span>${E(message)}</span>`;$('#toasts').append(node);setTimeout(()=>node.remove(),type==='error'?7500:4200);
 }
 function modal(title,body,subtitle='',footer=''){
-  hidePopover();const dlg=$('#modal');dlg.innerHTML=`<div class="modal-head"><div><h2>${E(title)}</h2>${subtitle?`<p>${E(subtitle)}</p>`:''}</div>${ib('close','Close dialog','close-modal')}</div><div class="modal-body">${body}</div>${footer?`<div class="modal-footer">${footer}</div>`:''}`;
-  if(!dlg.open)dlg.showModal();
+  clearDeviceDialog();hidePopover();const dlg=$('#modal');dlg.innerHTML=`<div class="modal-head"><div><h2>${E(title)}</h2>${subtitle?`<p>${E(subtitle)}</p>`:''}</div>${ib('close','Close dialog','close-modal')}</div><div class="modal-body">${body}</div>${footer?`<div class="modal-footer">${footer}</div>`:''}`;
+  dlg.setAttribute('aria-labelledby','modal-title');if(!dlg.open)dlg.showModal();
 }
 function formError(error){const form=$('#modal .modal-body');if(!form)return toast(error.message||error,'error');form.querySelector('.form-error')?.remove();const el=document.createElement('div');el.className='form-error';el.setAttribute('role','alert');el.textContent=error.message||String(error);form.prepend(el);}
 function hidePopover(){$('#popover').hidden=true;}
@@ -243,7 +245,7 @@ function authForm(mode='login'){
 }
 function profileMenu(anchor){popover(`<div style="padding:10px 11px 13px"><strong style="font-size:12px">${E(state.me.name)}</strong><p class="tiny muted" style="margin-top:5px">${E(state.me.email||state.provider.name)}</p></div>${state.provider.kind!=='microsoft'?['available','busy','away','offline'].map(status=>menuItem(status[0].toUpperCase()+status.slice(1),'set-status',status===state.me.status?'check':'clock',`data-value="${status}"`)).join(''):''}<div class="separator" style="margin:5px"></div>${menuItem('Workspace settings','settings','settings')}${menuItem('Help & keyboard shortcuts','help','help')}`,anchor);}
 function editProfile(){modal('A familiar face',`<form id="profile-form">${field('Display name','name',state.me.name,'text','required maxlength="80"')}<div class="notice">This changes your ${state.provider.kind==='local'?'device-local':'Veyra workspace'} profile. It does not change your Microsoft account.</div><div class="row" style="justify-content:flex-end"><button type="submit" class="button primary">Save profile</button></div></form>`,'Make your workspace feel a little more like you.');}
-function showHelp(){modal('A little help goes a long way',`<div class="help-grid"><div class="notice"><strong>Veyra 1.0</strong> · Original, framework-free collaboration workspace. Sample people and messages are fictional. Buttons operate on real local data, the self-hosted server, or explicitly connected Microsoft data.</div><h3>Conversations</h3><p><kbd>Enter</kbd> sends a message. <kbd>Shift</kbd> + <kbd>Enter</kbd> adds a new line. Hover a message to react, reply, save, edit, or delete your own messages. Message receipts say “Sent” or “Saved on this device”; Veyra does not invent read receipts.</p><h3>Find your way</h3><p><kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>K</kbd> opens search. Search covers messages already loaded into this session and available workspace members. Open a conversation to load its history. JSON export includes the server’s full authorized message history.</p><h3>Notes & whiteboards</h3><p>Edits autosave with revision checks. Conflicting versions are never silently merged. Export your recovery draft before reloading another revision. Whiteboard tools draw real geometry; select and drag to move, drag a selection’s lower-right handle to resize, and double-click a sticky note to edit. <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Z</kbd> undoes. Wheel pans; Ctrl/⌘ + wheel zooms.</p><h3>Real calls</h3><p>Camera and microphone start only after you choose Join. Local calls work between tabs on this origin. Live calls require registered room members, HTTPS, and a TURN service for reliable connectivity across networks. Eight-person mesh limit. “Record me” records only your own microphone/camera, with explicit confirmation.</p><h3>Microsoft integration</h3><p>Configure an Entra app registration with the shown SPA redirect URI. Sign in through MSAL; Graph permissions are requested for the actions you use. Personal sign-in is supported, but Teams chat APIs are not available to personal Microsoft accounts. ACS meetings require the included server, a Veyra session, and an administrator-configured ACS resource. You join as an external ACS participant, not as your Teams identity.</p><h3>Your data</h3><p>Local mode stores data in IndexedDB; clearing browser data removes it. Live mode stores data in SQLite and the server’s uploads directory. Export messages and metadata from Settings, and download important files. The browser stores recoverable drafts, personal pins, and appearance settings separately.</p></div>`,'Small details. Clear boundaries. Actual functionality.');}
+function showHelp(){modal('A little help goes a long way',`<div class="help-grid"><div class="notice"><strong>Veyra 1.1</strong> · Original, framework-free collaboration workspace. Sample people and messages are fictional. Buttons operate on real local data, the self-hosted server, or explicitly connected Microsoft data.</div><h3>Conversations</h3><p><kbd>Enter</kbd> sends a message. <kbd>Shift</kbd> + <kbd>Enter</kbd> adds a new line. Hover a message to react, reply, save, edit, or delete your own messages. Message receipts say “Sent” or “Saved on this device”; Veyra does not invent read receipts.</p><h3>Find your way</h3><p><kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>K</kbd> opens search. Search covers messages already loaded into this session and available workspace members. Open a conversation to load its history. JSON export includes the server’s full authorized message history.</p><h3>Notes & whiteboards</h3><p>Edits autosave with revision checks. Conflicting versions are never silently merged. Export your recovery draft before reloading another revision. Whiteboard tools draw real geometry; select and drag to move, drag a selection’s lower-right handle to resize, and double-click a sticky note to edit. <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Z</kbd> undoes. Wheel pans; Ctrl/⌘ + wheel zooms.</p><h3>Real calls</h3><p>Use the pre-call device panel to test your microphone level and camera preview. Devices start only after an explicit Test, Enable, or Join action. Retry denied devices after allowing browser/site permissions, or join without devices. Local calls work between tabs on this origin. Live calls require registered room members, HTTPS, and a TURN service for reliable connectivity across networks. Eight-person mesh limit. “Record me” records only your own microphone/camera, with explicit confirmation.</p><h3>Microsoft integration</h3><p>Configure an Entra app registration with the shown SPA redirect URI. Sign in through MSAL; Graph permissions are requested for the actions you use. Personal sign-in is supported, but Teams chat APIs are not available to personal Microsoft accounts. ACS meetings require the included server, a Veyra session, and an administrator-configured ACS resource. You join as an external ACS participant, not as your Teams identity.</p><h3>Your data</h3><p>Local mode stores data in IndexedDB; clearing browser data removes it. Live mode stores data in SQLite and the server’s uploads directory. Export messages and metadata from Settings, and download important files. The browser stores recoverable drafts, personal pins, and appearance settings separately.</p></div>`,'Small details. Clear boundaries. Actual functionality.');}
 function runSearch(query){
   const id=++state.searchId;if(!query.trim()){$('#search-results').hidden=true;return;}
   if(searchWorker)searchWorker.postMessage({type:'query',id,query});else{const words=query.toLowerCase().split(/\s+/);const messages=[...state.allMessages.values()].filter(m=>!m.deleted&&words.every(w=>`${m.authorName} ${m.content}`.toLowerCase().includes(w)));renderSearch({id,query,messages:messages.slice(0,20),total:messages.length});}
@@ -253,45 +255,119 @@ function renderSearch(data){
   el.innerHTML=`<div class="search-label">${data.total} matching loaded messages${people.length?` · ${people.length} people`:''}</div>${people.map(p=>`<button class="search-hit" data-action="search-person" data-id="${E(p.id)}">${avatar(p)}<div class="grow"><h4>${E(p.name)}</h4><small>${E(p.email||p.title||'Workspace member')}${p.status==='sample'?' · fictional sample':''}</small></div></button>`).join('')}${data.messages.map(m=>`<button class="search-hit" data-action="jump-message" data-id="${E(m.id)}" data-room="${E(m.roomId)}">${icon('chat',20)}<div class="grow"><h4>${E(m.authorName||user(m.authorId).name)} · ${E(room(m.roomId)?.name||'Conversation')}</h4><p>${E(m.content.slice(0,200))}</p><small>${E(relativeTime(m.createdAt))}</small></div></button>`).join('')}${!people.length&&!data.messages.length?'<div class="empty-state" style="min-height:140px;padding:25px"><p>No matches. Search only includes loaded messages.</p></div>':''}`;el.hidden=false;
 }
 
+function clearDeviceDialog(){
+  const session=state.prejoin;state.prejoin=null;state.devicePanel?.dispose();state.devicePanel=null;
+  if(session&&!session.transferred){session.media.dispose();if(state.call?.media===session.media)leaveCall(false).catch(()=>{});}
+}
+function attachPrejoinPanel(session){
+  state.devicePanel?.dispose();
+  state.devicePanel=new DevicePanel($('#prejoin-devices'),session.media,{onIntent:(kind,enabled)=>{
+    const field=$('#call-join-form')?.elements.namedItem(kind);if(field)field.checked=enabled;
+    ++session.attempt;const submit=$('#call-join-form [type=submit]');if(submit&&!session.joining)submit.disabled=false;
+  }});
+}
 function prejoin(roomId=state.roomId){
   if(state.provider.kind==='microsoft')return joinTeamsForm();
+  if(state.call||state.teamsCall)return toast('Leave the current call before opening another.');
   if(!state.rooms.length)return toast('Create a conversation before starting a call.');
   const selected=room(roomId)||state.rooms[0];
-  modal('A face-to-face moment',`<form id="call-join-form"><div class="join-preview">${avatar(state.me,{large:true})}<span>Camera and microphone have not started.</span></div><label class="field"><span>Conversation</span><select name="roomId">${state.rooms.map(r=>`<option value="${E(r.id)}" ${r.id===selected.id?'selected':''}>${E(r.name)}</option>`).join('')}</select></label><label class="checkbox-row"><input name="audio" type="checkbox" checked> Turn on microphone when I join</label><label class="checkbox-row"><input name="video" type="checkbox"> Turn on camera when I join</label><div class="notice">${state.provider.kind==='local'?'Local mode connects actual tabs on this device. Open another Veyra tab and join this conversation to try a real peer-to-peer call. Sample people never join calls.':'Only conversation members can join. WebRTC encrypts media in transit. Cross-network connectivity depends on your deployment’s TURN service.'}<br>Uncheck both options to join without sending media.</div><div class="row" style="justify-content:flex-end">${button('Cancel','close-modal','','quiet')}<button type="submit" class="button primary">${icon('video',16)}Join call</button></div></form>`,selected.name);
+  modal('Ready when you are',`<form id="call-join-form"><label class="field"><span>Conversation</span><select name="roomId">${state.rooms.map(r=>`<option value="${E(r.id)}" ${r.id===selected.id?'selected':''}>${E(r.name)}</option>`).join('')}</select></label><div id="prejoin-devices"></div><label class="checkbox-row"><input name="audio" type="checkbox" checked> Use microphone in this call</label><label class="checkbox-row"><input name="video" type="checkbox"> Use camera in this call</label><div class="notice">${state.provider.kind==='local'?'Local mode connects actual tabs on this device, not other phones or computers. Sample people never join calls.':'Only conversation members can join. Cross-network connectivity depends on your deployment’s TURN service.'}</div><div class="prejoin-actions">${button('Cancel','close-modal','','quiet')}${button('Join without devices','call-join-without','','small')}<button type="submit" class="button primary">${icon('video',16)}Join call</button></div><p class="device-notice" id="prejoin-progress" role="status"></p></form>`,selected.name);
+  const session={media:new MediaController(),attempt:0,joining:false,transferred:false};state.prejoin=session;attachPrejoinPanel(session);
+}
+async function submitCallJoin(form,receiveOnly=false){
+  const session=state.prejoin;if(!session||session.joining)return;
+  const attempt=++session.attempt,submit=form.querySelector('[type=submit]');submit.disabled=true;
+  if(receiveOnly){form.elements.namedItem('audio').checked=false;form.elements.namedItem('video').checked=false;}
+  const options={audio:form.elements.namedItem('audio').checked,video:form.elements.namedItem('video').checked};
+  const roomId=form.elements.namedItem('roomId').value;
+  // Start native capture in this submit/click stack; keep the dialog through permission failures.
+  const preparing=session.media.prepare(options);
+  $('#prejoin-progress').textContent=options.audio||options.video?'Waiting for selected devices. You can cancel or join without devices.':'Joining without sending microphone or camera…';
+  try{
+    await preparing;if(state.prejoin!==session||attempt!==session.attempt||session.media.closed)return;
+    session.joining=true;$('#prejoin-progress').textContent='Connecting to the conversation…';
+    form.querySelectorAll('input,select,button').forEach(el=>{if(el.dataset.action!=='close-modal')el.disabled=true;});
+    await startCall(roomId,options,session.media);
+    if(state.prejoin!==session||attempt!==session.attempt)return;
+    session.transferred=true;$('#modal').close();
+  }catch(cause){
+    if(state.prejoin!==session||attempt!==session.attempt)return;
+    if(session.media.closed){session.media=new MediaController();attachPrejoinPanel(session);formError(cause);}
+    else state.devicePanel?.showError(cause);
+    $('#prejoin-progress').textContent='Not joined. Retry a device, uncheck the blocked device, or join without devices.';
+  }finally{
+    if(state.prejoin===session&&attempt===session.attempt){session.joining=false;form.querySelectorAll('input,select,button').forEach(el=>el.disabled=false);state.devicePanel?.update();}
+  }
+}
+function showCallDevices(){
+  if(!state.call)return;
+  modal('Call devices',`<div id="active-call-devices"></div><div class="row">${button('Export diagnostics','call-diagnostics','download','small')}</div>`,'Changes apply to the active call. No need to hang up.');
+  state.devicePanel=new DevicePanel($('#active-call-devices'),state.call.media,{call:state.call});
+}
+function renderCallParticipants(){
+  const target=$('#call-participants');if(!target||!state.call)return;
+  const people=[{id:'local',name:state.me.name+' (you)',...state.call.payload(),state:'local'},...[...state.call.peers.values()].map(p=>({...p,state:p.pc.connectionState}))];
+  target.innerHTML=people.map(p=>`<div class="call-person">${avatar({name:p.name,color:'#e7dff7'})}<div class="grow"><strong>${E(p.name)}</strong><p>${p.muted?'Microphone off':'Microphone on'} · ${p.camera?'Camera on':'Camera off'} · ${E(p.state)}${p.hand?' · Hand raised':''}${p.screen?' · Sharing screen':''}</p></div>${button(state.focusedPeer===p.id?'Unpin':'Pin','call-pin','pin','small',`data-id="${E(p.id)}"`)}</div>`).join('');
+}
+function exportCallDiagnostics(){
+  const c=state.call;if(!c)return;
+  const media=Object.fromEntries(Object.entries(c.media.snapshot()).map(([kind,v])=>[kind,{status:v.status,capturing:v.capturing,interrupted:v.interrupted,errorCode:v.issue?.code||null}]));
+  const report={version:'1.1.0',provider:state.provider.kind,secureContext:globalThis.isSecureContext,media,screenCapture:!!navigator.mediaDevices?.getDisplayMedia,statistics:c.stats||null};
+  downloadBlob(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}),'veyra-call-diagnostics.json');
 }
 function callControl(name,label,action,cls=''){return`<button class="call-control ${cls}" data-action="${action}" aria-label="${E(label)}"><span class="control-disc">${icon(name,20)}</span><span>${E(label)}</span></button>`;}
 function buildCallOverlay(title,teams=false){
   const overlay=$('#call-overlay');overlay.hidden=false;
-  overlay.innerHTML=`<header class="call-top"><div class="grow"><h2>${E(title)}</h2><p id="call-status">${teams?'Starting official ACS meeting connection…':'Opening a real peer-to-peer call…'}</p></div>${button('Copy invite','copy-call-link','link','small')}${ib('close','Leave call','call-leave')}</header><div class="call-layout"><div id="call-videos" class="call-videos"></div><aside id="call-chat" class="call-chat" hidden><h3>Conversation chat</h3><div id="call-chat-messages" class="call-chat-messages"></div><form id="call-chat-form" class="call-chat-form"><input name="content" placeholder="Write a message…" aria-label="Call chat message" maxlength="12000" required><button type="submit" aria-label="Send call chat message">${icon('send',17)}</button></form></aside></div><footer><div class="call-controls">${callControl('mic','Mute','call-mic')}${callControl('videoOff','Camera','call-camera')}${callControl('screen','Share','call-screen')}${!teams?callControl('hand','Raise hand','call-hand')+callControl('chat','Chat','call-chat')+callControl('activity','Record me','call-record'):''}${callControl('calls','Leave','call-leave','leave')}</div><div id="call-stats" class="call-stats">${teams?'Official Azure Communication Services · external participant identity':'WebRTC · encrypted in transit · no simulated participants'}</div></footer>`;
+  overlay.innerHTML=`<header class="call-top"><div class="grow"><h2>${E(title)}</h2><p id="call-status">${teams?'Starting official ACS meeting connection…':'Opening a real peer-to-peer call…'}</p></div>${button('Copy invite','copy-call-link','link','small')}${ib('close','Leave call','call-leave')}</header><div id="call-media-warning" class="call-media-warning" role="status" hidden></div><div class="call-layout"><div id="call-videos" class="call-videos"></div><aside id="call-chat" class="call-chat" hidden><h3>Conversation chat</h3><div id="call-chat-messages" class="call-chat-messages"></div><form id="call-chat-form" class="call-chat-form"><input name="content" placeholder="Write a message…" aria-label="Call chat message" maxlength="12000" required><button type="submit" aria-label="Send call chat message">${icon('send',17)}</button></form></aside></div><footer><div class="call-controls">${callControl('mic','Mute','call-mic')}${callControl('videoOff','Camera','call-camera')}${callControl('screen','Share','call-screen')}${!teams?callControl('settings','Devices','call-devices')+callControl('teams','People','call-people')+callControl('hand','Raise hand','call-hand')+callControl('chat','Chat','call-chat')+callControl('activity','Record me','call-record'):''}${callControl('calls','Leave','call-leave','leave')}</div><div id="call-stats" class="call-stats">${teams?'Official Azure Communication Services · external participant identity':'WebRTC · encrypted in transit · no simulated participants'}</div></footer>`;
+}
+function playCallVideo(video){
+  const tile=video.closest('.video-tile'),button=tile?.querySelector('[data-action=call-play]');
+  if(!button||!video.srcObject?.active)return;
+  video.play().then(()=>{button.hidden=true;},()=>{if(video.isConnected)button.hidden=false;});
 }
 function videoTile(id,name,stream,{self=false,peer=null,screen=false}={}){
-  const parent=$('#call-videos');if(!parent)return;
+  const parent=$('#call-videos');if(!parent||!stream)return;
   let tile=[...parent.children].find(el=>el.dataset.peerId===id);
-  if(!tile){tile=document.createElement('div');tile.className='video-tile';tile.dataset.peerId=id;tile.innerHTML=`<video autoplay playsinline ${self?'muted':''}></video><div class="video-placeholder">${avatar({name,color:'#675177'})}</div><div class="video-label"><span class="video-name"></span><small class="video-state"></small><span class="hand-indicator"></span></div>`;parent.append(tile);}
-  const video=tile.querySelector('video');if(video.srcObject!==stream){video.srcObject=stream;video.muted=self;video.play().catch(()=>{});}video.classList.toggle('screen',screen);
-  const visible=stream.getVideoTracks().some(t=>t.readyState==='live'&&t.enabled&&!t.muted)&&(peer?.camera!==false||peer?.screen||screen||self&&state.call?.camera);
+  if(!tile){
+    tile=document.createElement('div');tile.className='video-tile';tile.dataset.peerId=id;
+    tile.innerHTML=`<video autoplay playsinline></video><div class="video-placeholder">${avatar({name,color:'#675177'})}</div><button type="button" class="button playback-retry" data-action="call-play" data-id="${E(id)}" hidden>${self?'Play preview':'Tap to play audio/video'}</button><div class="video-label"><span class="video-name"></span><small class="video-state"></small><span class="hand-indicator"></span>${ib('pin','Pin participant','call-pin',`data-id="${E(id)}"`)}</div>`;parent.append(tile);
+    const video=tile.querySelector('video');video.muted=self;video.defaultMuted=self;video.playsInline=true;
+    video.addEventListener('loadedmetadata',()=>playCallVideo(video));
+  }
+  const video=tile.querySelector('video');video.muted=self;
+  if(video.srcObject!==stream)video.srcObject=stream;
+  if(video.paused)playCallVideo(video);video.classList.toggle('screen',screen);
+  const hasVideo=stream.getVideoTracks().some(t=>t.readyState==='live'&&t.enabled&&!t.muted);
+  const visible=hasVideo&&(self?(screen||state.call?.camera):(peer?.camera!==false||peer?.screen||screen));
   tile.querySelector('.video-placeholder').hidden=visible;
   tile.querySelector('.video-name').textContent=name+(self?' (you)':'');
   tile.querySelector('.video-state').textContent=peer?.muted?'· muted':self&&state.call?.muted?'· muted':'';
   tile.querySelector('.hand-indicator').textContent=peer?.hand||self&&state.call?.hand?'✋':'';
-  updateCallRoster();
+  tile.classList.toggle('focused',state.focusedPeer===id);updateCallRoster();
 }
 function updateCallRoster(){
   if(!state.call)return;const parent=$('#call-videos');if(!parent)return;
   parent.querySelector('.waiting-tile')?.remove();
   if(!state.call.peers.size){const tile=document.createElement('div');tile.className='waiting-tile';tile.innerHTML=`${icon('teams',29)}<h3>Your space is open.</h3><p>${state.provider.kind==='local'?'Open a second Veyra tab on this device and join the same conversation. Only actual tabs will appear here.':'Share the invite with a conversation member. They can join after signing in to this installation.'}</p>${button('Copy invite','copy-call-link','link','small')}`;parent.append(tile);}
+  renderCallParticipants();
   const target=$('#call-status');if(target)target.textContent=`${state.call.peers.size+1} ${state.call.peers.size?'participants':'participant'} · ${state.provider.kind==='local'?'Device-local collaboration':'Live Veyra room'} · ${state.call.muted?'Microphone off':'Microphone on'}`;
 }
 function updateCallControls(){
   const c=state.call||state.teamsCall;if(!c)return;
-  const set=(action,active,name,label)=>{const button=$(`[data-action="${action}"].call-control`);if(button){button.classList.toggle('active',active);button.setAttribute('aria-label',label);button.innerHTML=`<span class="control-disc">${icon(name,20)}</span><span>${label}</span>`;}};
+  const set=(action,active,name,label)=>{const button=$(`[data-action="${action}"].call-control`);if(button){button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));button.setAttribute('aria-label',label);button.innerHTML=`<span class="control-disc">${icon(name,20)}</span><span>${label}</span>`;}};
   set('call-mic',c.muted,c.muted?'micOff':'mic',c.muted?'Unmute':'Mute');set('call-camera',c.camera,'video','Camera');set('call-screen',!!c.screen,'screen',c.screen?'Stop share':'Share');set('call-hand',!!c.hand,'hand',c.hand?'Lower hand':'Raise hand');set('call-record',!!state.recorder,'activity',state.recorder?'Stop record':'Record me');
+  const share=$('[data-action=call-screen].call-control');if(share&&!state.teamsCall){share.disabled=!navigator.mediaDevices?.getDisplayMedia;share.title=share.disabled?'Screen sharing is not supported by this browser.':'';}
   if(state.call?.local)videoTile('local',state.me.name,state.call.screen||state.call.local,{self:true,screen:!!state.call.screen});
 }
-async function startCall(roomId,options){
+async function startCall(roomId,options,media){
   if(state.call||state.teamsCall)throw new Error('Leave your current call first.');
-  const engine=new CallEngine(state.provider);state.call=engine;state.callRoom=roomId;buildCallOverlay(room(roomId)?.name||'Veyra call');
-  engine.addEventListener('local',e=>videoTile('local',state.me.name,e.detail.stream,{self:true,screen:e.detail.screen}));
+  const engine=new CallEngine(state.provider,media?{media}:{});state.call=engine;state.callRoom=roomId;buildCallOverlay(room(roomId)?.name||'Veyra call');
+  engine.addEventListener('local',e=>{
+    if(state.recorder&&state.recordingTracks?.some(t=>t.readyState!=='live'||!engine.local?.getTracks().includes(t)))stopRecording();
+    videoTile('local',state.me.name,e.detail.stream,{self:true,screen:e.detail.screen});
+  });
+  engine.addEventListener('media',e=>{const target=$('#call-media-warning');if(!target)return;const issues=Object.values(e.detail).filter(v=>v.issue||v.interrupted);target.hidden=!issues.length;target.innerHTML=issues.length?`${E(issues.map(v=>v.issue?.title||'A device was interrupted').join('. '))} ${button('Check devices','call-devices','settings','small')}`:'';});
+  engine.addEventListener('signaling',e=>{const target=$('#call-media-warning');if(target&&!e.detail.connected){target.hidden=false;target.textContent='Signaling disconnected. Reconnecting; existing media may continue.';}});
   engine.addEventListener('peer',()=>updateCallRoster());
   engine.addEventListener('remote',e=>videoTile(e.detail.peer.id,e.detail.peer.name,e.detail.stream,{peer:e.detail.peer,screen:e.detail.peer.screen}));
   engine.addEventListener('peer-state',e=>{if(e.detail.peer.stream)videoTile(e.detail.peer.id,e.detail.peer.name,e.detail.peer.stream,{peer:e.detail.peer,screen:e.detail.peer.screen});});
@@ -299,14 +375,15 @@ async function startCall(roomId,options){
   engine.addEventListener('state',updateCallControls);
   engine.addEventListener('joined',()=>{state.callStartedAt=Date.now();updateCallControls();updateCallRoster();});
   engine.addEventListener('error',e=>toast(e.detail.message,'error'));
-  engine.addEventListener('stats',e=>{const target=$('#call-stats'),s=e.detail;if(target)target.textContent=`WebRTC · ${s.connected} connected peers · ${Math.round(s.bytesReceived/1024)} KB received · ${Math.round(s.roundTripTime*1000)} ms RTT · ${s.packetsLost} packets lost`;});
-  try{await engine.join(roomId,options);await engine.state();renderCallChat();}catch(e){await leaveCall(false);throw e;}
+  engine.addEventListener('stats',e=>{const target=$('#call-stats'),s=e.detail;if(target)target.textContent=`WebRTC · ${s.connected} connected peers · ${Math.round(s.bytesReceived/1024)} KB received · ${Math.round(s.roundTripTime*1000)} ms RTT · ${Math.round(s.receiveKbps)} kb/s · ${Math.round(s.jitter*1000)} ms jitter · ${s.packetsLost} packets lost`;});
+  try{await engine.join(roomId,options);renderCallChat();}catch(e){if(state.call===engine)await leaveCall(false);else await engine.dispose();throw e;}
 }
 function renderCallChat(){const target=$('#call-chat-messages');if(!target||!state.callRoom)return;const near=target.scrollHeight-target.scrollTop-target.clientHeight<60;target.innerHTML=[...state.allMessages.values()].filter(m=>m.roomId===state.callRoom&&!m.deleted).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)).slice(-50).map(m=>`<div class="call-chat-message"><strong>${E(m.authorName||user(m.authorId).name)}</strong>${E(m.content)}</div>`).join('');if(near)target.scrollTop=target.scrollHeight;}
 async function leaveCall(saveHistory=true){
   const engine=state.call,teams=state.teamsCall,started=state.callStartedAt;
   if(!engine&&!teams)return;
-  stopRecording();state.call=null;state.teamsCall=null;state.callStartedAt=null;$('#call-overlay').hidden=true;$('#call-overlay').innerHTML='';
+  if(state.devicePanel?.call===engine){state.devicePanel.dispose();state.devicePanel=null;if($('#modal').open&&!state.prejoin)$('#modal').close();}
+  stopRecording();state.focusedPeer=null;state.call=null;state.teamsCall=null;state.callStartedAt=null;$('#call-overlay').hidden=true;$('#call-overlay').innerHTML='';
   if(started&&saveHistory){state.callHistory.push({id:uid(),roomId:state.callRoom,title:teams?'Teams meeting':room(state.callRoom)?.name||'Veyra call',kind:teams?'teams':'veyra',startedAt:started,duration:Date.now()-started});state.callHistory=state.callHistory.slice(-100);saveLocal('callHistory',state.callHistory);}
   state.callRoom=null;await engine?.dispose();await teams?.leave();if(state.route==='calls'&&state.provider)renderCalls();
 }
@@ -316,8 +393,8 @@ function toggleRecording(){
   if(typeof MediaRecorder==='undefined')throw new Error('This browser does not support local recording.');
   const tracks=state.call.local.getTracks().filter(t=>t.readyState==='live'&&t.enabled);if(!tracks.length)throw new Error('Enable your microphone or camera before recording yourself.');
   if(!confirm('Record only your own microphone and camera? Remote participants and shared screens are not included. A recording file will be saved to this device. Recording stops automatically after 30 minutes.'))return;
-  const stream=new MediaStream(tracks),mime=['video/webm;codecs=vp8,opus','video/webm','audio/webm'].find(m=>MediaRecorder.isTypeSupported(m));
-  const recorder=new MediaRecorder(stream,mime?{mimeType:mime}:undefined),chunks=[];recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};recorder.onstop=()=>{downloadBlob(new Blob(chunks,{type:recorder.mimeType}),`veyra-self-recording-${Date.now()}.webm`);};recorder.start(1000);state.recorder=recorder;state.recordingTimer=setTimeout(stopRecording,30*60000);updateCallControls();toast('Recording only your own microphone and camera.');
+  const stream=new MediaStream(tracks);state.recordingTracks=tracks;
+  const recorder=new MediaRecorder(stream,recordingOptions(MediaRecorder,tracks.some(t=>t.kind==='video'))),chunks=[];recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};recorder.onerror=()=>{toast('Local recording stopped because the browser could not continue.','error');stopRecording();};recorder.onstop=()=>{if(state.recorder===recorder){state.recorder=null;clearTimeout(state.recordingTimer);updateCallControls();}downloadBlob(new Blob(chunks,{type:recorder.mimeType}),`veyra-self-recording-${Date.now()}.${recordingExtension(recorder.mimeType)}`);};recorder.start(1000);state.recorder=recorder;state.recordingTimer=setTimeout(stopRecording,30*60000);updateCallControls();toast('Recording only your own microphone and camera.');
 }
 function joinTeamsForm(link=''){
   modal('Join a Microsoft Teams meeting',`<form id="teams-join-form">${field('Teams meeting link','link',link,'url','required placeholder="https://teams.microsoft.com/l/meetup-join/…"')}${field('Guest display name','name',state.me.name,'text','required maxlength="80"')}<label class="checkbox-row"><input type="checkbox" name="audio" checked> Turn on microphone when I join</label><label class="checkbox-row"><input type="checkbox" name="video"> Turn on camera when I join</label><div class="notice"><strong>Supported ACS interop, not a private protocol clone.</strong><br>You join as an external Azure Communication Services participant, not as your signed-in Teams identity. The organizer may need to admit you from the lobby. Tenant policies can prevent entry. The meeting’s Teams chat is not provided by this adapter.</div><div class="notice warning">Requires a live Veyra server session, configured ACS_CONNECTION_STRING, and the official browser calling SDKs. Sign in to the live workspace first; Microsoft Graph sign-in alone does not create an ACS token.</div><div class="row" style="justify-content:flex-end"><button type="submit" class="button primary">${microsoftLogo}Join through ACS</button></div></form>`,'Your meeting stays hosted by Microsoft Teams.');
@@ -332,7 +409,7 @@ async function startTeamsMeeting(data){
     const parent=$('#call-videos');if(!parent)return;const d=e.detail;let tile=[...parent.children].find(n=>n.dataset.peerId===d.id);if(!tile){tile=document.createElement('div');tile.className='video-tile';tile.dataset.peerId=d.id;tile.innerHTML=`${avatar({name:d.name,color:'#675177'})}<div class="video-label">${E(d.name)}</div>`;parent.append(tile);}if(d.view===null)tile.querySelector('.acs-view')?.remove();if(d.view){tile.querySelector('.acs-view')?.remove();d.view.classList.add('acs-view');tile.prepend(d.view);}
   });
   meeting.addEventListener('participant-left',e=>{[...($('#call-videos')?.children||[])].find(n=>n.dataset.peerId===e.detail.id)?.remove();});meeting.addEventListener('error',e=>toast(e.detail.message,'error'));
-  try{await meeting.join(data.link,{audio:data.audio,video:data.video});updateCallControls();}catch(e){await leaveCall(false);throw e;}
+  try{await meeting.join(data.link,{audio:data.audio,video:data.video});updateCallControls();}catch(e){if(state.teamsCall===meeting)await leaveCall(false);else await meeting.leave();throw e;}
 }
 
 async function sendComposer(){
@@ -418,6 +495,12 @@ async function action(name,el){
     case'new-event':return eventForm();case'event-details':return eventDetails(id);case'edit-event':return eventForm(state.events.find(e=>e.id===id));case'export-event':return exportEvent(state.events.find(e=>e.id===id));
     case'delete-event':if(confirm('Delete this calendar entry?')){await state.provider.deleteEvent(id);state.events=state.events.filter(e=>e.id!==id);$('#modal').close();if(state.route==='calendar')renderCalendar();}return;
     case'join-event':{const e=state.events.find(e=>e.id===id);if(!e)return;$('#modal').close();if(e.joinUrl){const url=new URL(e.joinUrl);if(['teams.microsoft.com','teams.cloud.microsoft','teams.live.com'].includes(url.hostname))return joinTeamsForm(e.joinUrl);if(safeURL(e.joinUrl)){window.open(e.joinUrl,'_blank','noopener,noreferrer');return;}}return prejoin(e.roomId||state.roomId);}
+    case'call-join-without':return submitCallJoin($('#call-join-form'),true);
+    case'call-devices':return showCallDevices();
+    case'call-diagnostics':return exportCallDiagnostics();
+    case'call-people':if(state.call){modal('People in this call','<div id="call-participants"></div>','Only actual connected participants are listed.');renderCallParticipants();}return;
+    case'call-pin':state.focusedPeer=state.focusedPeer===id?null:id;for(const tile of $$('#call-videos .video-tile'))tile.classList.toggle('focused',tile.dataset.peerId===state.focusedPeer);renderCallParticipants();return;
+    case'call-play':{const video=[...($('#call-videos')?.children||[])].find(n=>n.dataset.peerId===id)?.querySelector('video');if(video)playCallVideo(video);return;}
     case'start-call':return prejoin();case'call-room':return prejoin(id);case'join-teams':return joinTeamsForm();
     case'copy-call-link':return copy(state.teamsCall?state.teamsLink:new URL(`./#call=${encodeURIComponent(state.callRoom)}`,location.href).href);
     case'call-mic':{const c=state.call||state.teamsCall;if(c)await c.setMuted(!c.muted);return updateCallControls();}
@@ -455,11 +538,11 @@ document.addEventListener('submit',async event=>{
     else if(form.getAttribute('id')==='microsoft-config-form'){saveConfig(object);toast('Public Microsoft app configuration saved.');}
     else if(form.getAttribute('id')==='profile-form'){state.me=await state.provider.setProfile({name:object.name});$('#modal').close();renderTopbar();renderFeed();toast('Profile updated.');}
     else if(form.getAttribute('id')==='event-form'){const input={...object,id:object.id||undefined,start:new Date(object.start).toISOString(),end:new Date(object.end).toISOString()};const saved=await state.provider.saveEvent(input);const i=state.events.findIndex(e=>e.id===saved.id);if(i<0)state.events.push(saved);else state.events[i]=saved;$('#modal').close();if(state.route==='calendar')renderCalendar();else renderDetails();toast('Meeting saved to the calendar.');}
-    else if(form.getAttribute('id')==='call-join-form'){const options={audio:data.has('audio'),video:data.has('video')};$('#modal').close();await startCall(object.roomId,options);}
+    else if(form.getAttribute('id')==='call-join-form'){await submitCallJoin(form);}
     else if(form.getAttribute('id')==='teams-join-form'){await startTeamsMeeting({link:object.link,name:object.name,audio:data.has('audio'),video:data.has('video')});$('#modal').close();}
     else if(form.getAttribute('id')==='call-chat-form'){const content=object.content.trim();if(content){const saved=await state.provider.send({id:uid(),roomId:state.callRoom,content,attachments:[]});upsertMessage(saved);form.reset();renderCallChat();}}
   }catch(e){if($('#modal').open)formError(e);else toast(e.message,'error');}
-  finally{if(submit)submit.disabled=false;}
+  finally{if(submit&&form.getAttribute('id')!=='call-join-form')submit.disabled=false;}
 });
 document.addEventListener('input',event=>{
   const el=event.target;
@@ -469,7 +552,7 @@ document.addEventListener('input',event=>{
   else if(el.id==='notes-editor')state.doc?.update({text:el.value});
   else if(el.id==='board-color'&&state.board)state.board.color=el.value;
 });
-document.addEventListener('change',event=>{const el=event.target;if(el.id==='file-input')uploadFiles([...el.files],el.dataset.intent,el.dataset.roomId).catch(e=>toast(e.message,'error'));if(el.id==='theme-select')applyTheme(el.value);});
+document.addEventListener('change',event=>{const el=event.target;if(el.closest('#call-join-form')&&['audio','video'].includes(el.name)&&state.devicePanel){Promise.resolve(state.devicePanel.enable(el.name,el.checked)).catch(e=>state.devicePanel?.showError(e));}if(el.id==='file-input')uploadFiles([...el.files],el.dataset.intent,el.dataset.roomId).catch(e=>toast(e.message,'error'));if(el.id==='theme-select')applyTheme(el.value);});
 document.addEventListener('keydown',event=>{
   if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k'){event.preventDefault();$('#global-search')?.focus();$('#global-search')?.select();}
   if(event.target.id==='composer-input'&&event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();$('#compose-form').requestSubmit();}
@@ -481,11 +564,13 @@ for(const type of ['dragenter','dragover','dragleave','drop'])document.addEventL
   if(![...event.dataTransfer?.types||[]].includes('Files'))return;event.preventDefault();target.classList.toggle('dragging',type==='dragenter'||type==='dragover');
   if(type==='drop'){target.classList.remove('dragging');uploadFiles([...event.dataTransfer.files],target.matches('.composer')?'compose':'files',state.roomId).catch(e=>toast(e.message,'error'));}
 });
+$('#modal').addEventListener('close',()=>{if(!$('#modal').open)clearDeviceDialog();});
 $('#modal').addEventListener('click',event=>{if(event.target===$('#modal')){const r=$('#modal').getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)$('#modal').close();}});
 window.addEventListener('beforeunload',event=>{if(state.doc?.dirty||state.doc?.saving||state.call||state.teamsCall){event.preventDefault();event.returnValue='';}});
-window.addEventListener('pagehide',()=>{state.call?.dispose();state.teamsCall?.leave();});
+window.addEventListener('pageshow',event=>{if(event.persisted&&state.call?.closed)leaveCall(false).catch(()=>{});});
+window.addEventListener('pagehide',()=>{clearDeviceDialog();state.call?.dispose();state.teamsCall?.leave();});
 matchMedia('(prefers-color-scheme:dark)').addEventListener('change',()=>{if(localStorage.getItem('veyra.theme')==='system')applyTheme('system');});
-Object.defineProperty(window,'veyraDiagnostics',{get:()=>({version:'1.0.0',provider:state.provider?.kind,roomId:state.roomId,messages:state.messages.length,loadedMessages:state.allMessages.size,renderer:state.board?.renderer.mode||'DOM',shapes:state.board?.shapes.length||0,renderedFrames:state.board?.renderer.frames||0,vertexCount:(state.board?.renderer.vertices.length||0)/6,gpuUploads:state.board?.renderer.uploads||0,callPeers:state.call?.peers.size||0,callState:state.call?.roomId?'joined':state.teamsCall?.call?.state||'idle',rtcBytesReceived:state.call?.stats?.bytesReceived||0,docVersion:state.doc?.version||0,docDirty:!!state.doc?.dirty,docConflict:!!state.doc?.conflict})});
+Object.defineProperty(window,'veyraDiagnostics',{get:()=>({version:'1.1.0',provider:state.provider?.kind,roomId:state.roomId,messages:state.messages.length,loadedMessages:state.allMessages.size,renderer:state.board?.renderer.mode||'DOM',shapes:state.board?.shapes.length||0,renderedFrames:state.board?.renderer.frames||0,vertexCount:(state.board?.renderer.vertices.length||0)/6,gpuUploads:state.board?.renderer.uploads||0,callPeers:state.call?.peers.size||0,camera:state.call?.camera||false,muted:state.call?.muted??true,prejoinMedia:state.prejoin?.media.snapshot()||null,callState:state.call?.roomId?'joined':state.teamsCall?.call?.state||'idle',rtcBytesReceived:state.call?.stats?.bytesReceived||0,docVersion:state.doc?.version||0,docDirty:!!state.doc?.dirty,docConflict:!!state.doc?.conflict})});
 
 async function boot(){
   applyTheme();let provider;const mode=localStorage.getItem('veyra.mode');
