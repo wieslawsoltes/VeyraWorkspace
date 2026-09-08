@@ -28,9 +28,12 @@ export class CallEngine extends EventTarget {
     const check = () => {if (this.closed || generation !== this.generation) throw error('Call cancelled.');};
     try {
       this.local = await preparation; check();
-      this.muted = !this.media.track('audio')?.enabled; this.camera = !!this.media.track('video')?.enabled;
       this.iceServers = this.provider.kind === 'server' ? (await this.provider.request('/ice')).iceServers : [];
-      check(); this.roomId = roomId; this.emit('local', {stream: this.local});
+      check(); this.roomId = roomId;
+      // Capture can end or be interrupted while ICE configuration is in flight.
+      const audio = this.media.track('audio'), video = this.media.track('video');
+      this.muted = !audio?.enabled || !!audio?.muted; this.camera = !!video?.enabled && !video.muted;
+      this.emit('local', {stream: this.local});
       const result = await this.provider.signal('call-join', {roomId, ...this.payload()});
       if (this.closed || generation !== this.generation) {
         // A cancelled HTTP join can still have reached the server. Remove that membership.

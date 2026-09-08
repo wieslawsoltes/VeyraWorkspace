@@ -28,3 +28,24 @@ test('MP4 recording and audio-only MIME negotiation match the actual filename fo
 test('microphone meter never connects to speakers and disposes its graph',async()=>{const connections=[];let closed=false,sourceDisconnected=false;class Context{state='running';destination={speaker:true};resume(){return Promise.resolve();}createAnalyser(){return {fftSize:512,disconnect(){},getFloatTimeDomainData(values){values.fill(.1);}};}createMediaStreamSource(){return {connect(node){connections.push(node);},disconnect(){sourceDisconnected=true;}};}close(){closed=true;return Promise.resolve();}}const levels=[];const meter=new MicrophoneMeter(v=>levels.push(v),{Context,Stream});meter.unlock();meter.attach(new Track('audio'));assert.equal(connections.length,1);assert.equal(connections[0].speaker,undefined);meter.dispose();assert.equal(closed,true);assert.equal(sourceDisconnected,true);await flush();});
 
 test('microphone meter attaches an existing track after a later user gesture',()=>{let connections=0;class Context{state='running';resume(){return Promise.resolve();}createAnalyser(){return {fftSize:512,disconnect(){},getFloatTimeDomainData(a){a.fill(0);}};}createMediaStreamSource(){return {connect(){connections++;},disconnect(){}};}close(){return Promise.resolve();}}const meter=new MicrophoneMeter(()=>{},{Context,Stream});const track=new Track('audio');meter.attach(track);assert.equal(connections,0);meter.unlock();assert.equal(connections,1);meter.attach(track);assert.equal(connections,1);meter.dispose();});
+
+for (const [activeFacing, nextFacing] of [['environment', 'user'], ['user', 'environment']]) {
+  test(`camera flip uses the active ${activeFacing} device rather than stale preference`, async t => {
+    const {media, devices} = create(); t.after(() => media.dispose());
+    await media.request('video');
+    const selected = new Track('video');
+    selected.getSettings = () => ({deviceId: 'chosen-camera', facingMode: activeFacing});
+    devices.handlers.push(() => Promise.resolve(new Stream([selected])));
+    await media.select('video', 'chosen-camera');
+    media.preferences.video.facingMode = nextFacing;
+    devices.handlers.push(constraints => {
+      assert.equal(selected.readyState, 'ended');
+      assert.equal(constraints.video.facingMode.ideal, nextFacing);
+      assert.equal(constraints.video.deviceId, undefined);
+      return Promise.resolve(new Stream([new Track('video')]));
+    });
+    await media.flipCamera();
+    assert.equal(media.preferences.video.facingMode, nextFacing);
+    assert.equal(media.stream.getVideoTracks().length, 1);
+  });
+}

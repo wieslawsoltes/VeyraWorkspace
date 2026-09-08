@@ -29,3 +29,22 @@ test('ignored offer collisions also discard their ICE candidates',async t=>{cons
 test('candidate queue is bounded and drained only after a remote description',async t=>{const {engine}=setup(t);await engine.join('room',{audio:false,video:false});const peer=engine.ensurePeer(remote);for(let i=0;i<150;i++)await engine.receive(peer,{candidate:{candidate:String(i)}});assert.equal(peer.pending.length,100);await engine.receive(peer,{description:{type:'answer',sdp:'v=0'}});assert.equal(peer.pending.length,0);assert.equal(peer.pc.candidates.length,100);});
 test('media state serialization drops unknown fields and does not trust truthy strings',()=>{assert.deepEqual(callState({muted:'false',camera:'true',hand:1,screen:true,token:'secret',sdp:'private'}),{muted:true,camera:false,hand:false,screen:true});});
 test('diagnostic stats expose aggregate transport measurements, not IP addresses or SDP',async t=>{const {engine}=setup(t);await engine.join('room',{audio:false,video:false});const peer=engine.ensurePeer(remote);peer.pc.connectionState='connected';peer.pc.getStats=async()=>new Map([['a',{type:'inbound-rtp',bytesReceived:1000,packetsLost:2,jitter:.003}],['b',{type:'candidate-pair',state:'succeeded',nominated:true,currentRoundTripTime:.08,ip:'private'}]]);await engine.statistics();assert.equal(engine.stats.bytesReceived,1000);assert.equal(engine.stats.roundTripTime,.08);assert.equal(engine.stats.jitter,.003);assert.equal(JSON.stringify(engine.stats).includes('private'),false);});
+
+for (const interruption of ['ended', 'muted']) {
+  test(`join advertises current capture state after ICE discovery: ${interruption}`, async t => {
+    const {engine, media, provider} = setup(t, 'server'), ice = defer();
+    let requested = false;
+    provider.request = route => {assert.equal(route, '/ice'); requested = true; return ice.promise;};
+    const joining = engine.join('room', {audio: true, video: true});
+    await flush(); assert.equal(requested, true); assert.equal(engine.roomId, null);
+    for (const kind of ['audio', 'video']) {
+      const track = media.track(kind); assert.ok(track);
+      if (interruption === 'ended') track.end(); else track.interrupt(true);
+    }
+    await engine.mediaQueue;
+    ice.resolve({iceServers: []}); await joining;
+    assert.equal(engine.muted, true); assert.equal(engine.camera, false);
+    const announcement = provider.signals.find(signal => signal.type === 'call-join');
+    assert.ok(announcement); assert.equal(announcement.muted, true); assert.equal(announcement.camera, false);
+  });
+}

@@ -165,7 +165,9 @@ export class MediaController extends EventTarget {
     return this.request(kind, {force: true});
   }
   flipCamera() {
-    const prefs = this.preferences.video; prefs.deviceId = ''; prefs.facingMode = prefs.facingMode === 'environment' ? 'user' : 'environment';
+    const prefs = this.preferences.video, activeFacing = this.track('video')?.getSettings?.()?.facingMode;
+    const facing = ['user', 'environment'].includes(activeFacing) ? activeFacing : prefs.facingMode;
+    prefs.deviceId = ''; prefs.facingMode = facing === 'environment' ? 'user' : 'environment';
     return this.request('video', {force: true});
   }
   async refreshDevices() {
