@@ -6,7 +6,7 @@ A browser policy blocking navigation/media is a failure, not a passed test.
 """
 import asyncio,json,os,shutil
 from pathlib import Path
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, expect
 
 async def wait_until(page, expression, timeout=30000):
  """Poll through the automation protocol without injecting an eval-based poller.
@@ -43,9 +43,19 @@ async def main():
    assert await page.evaluate('window.__xss||0')==0
    await page.reload(wait_until='networkidle');await wait_until(page,'document.querySelector("#message-feed")?.textContent.includes("Acceptance: saved")')
    report['checks'].append('Native persistence across reload and HTML injection escaping')
-   await page.locator('.tabs [data-action=tab][data-value=notes]').click();await page.locator('#notes-editor').fill('Saved through native IndexedDB')
-   await wait_until(page,'!window.veyraDiagnostics.docDirty&&window.veyraDiagnostics.docVersion>=2',timeout=6000)
-   report['checks'].append('Revisioned shared-editor persistence')
+   await page.locator('.tabs [data-action=tab][data-value=notes]').click()
+   # IndexedDB orders rooms by key. The initial room may have no seeded notes
+   # (revision zero), so await load and assert one committed revision increment.
+   await expect(page.locator('#doc-status')).to_contain_text('All changes saved')
+   revision=await page.evaluate('window.veyraDiagnostics.docVersion')
+   await page.locator('#notes-editor').fill('Saved through native IndexedDB')
+   await wait_until(page,f'!window.veyraDiagnostics.docDirty&&window.veyraDiagnostics.docVersion==={revision+1}',timeout=6000)
+   await page.reload(wait_until='networkidle');await page.locator('#composer-input').wait_for()
+   await page.locator('.tabs [data-action=tab][data-value=notes]').click()
+   await expect(page.locator('#doc-status')).to_contain_text('All changes saved')
+   await expect(page.locator('#notes-editor')).to_have_value('Saved through native IndexedDB')
+   assert await page.evaluate('window.veyraDiagnostics.docVersion')==revision+1
+   report['checks'].append('Revisioned shared-editor persistence across reload')
    await page.locator('.tabs [data-action=tab][data-value=board]').click();await page.wait_for_timeout(1000)
    report['renderer']=await page.evaluate('window.veyraDiagnostics.renderer')
    await page.screenshot(path=str(output/'whiteboard.png'))
@@ -72,6 +82,11 @@ async def main():
    report['passed']=not report['errors']
   except Exception as e:
    report['passed']=False;report['failure']=str(e)
+   try:
+    report['diagnostics']=await page.evaluate('window.veyraDiagnostics')
+    await page.screenshot(path=str(output/'failure.png'))
+   except Exception:
+    pass  # Preserve the original failure even if the page has already closed.
   finally:
    await context.close();await browser.close();(output/'browser-results.json').write_text(json.dumps(report,indent=2));print(json.dumps(report,indent=2))
  return report['passed']
