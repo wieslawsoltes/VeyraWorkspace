@@ -6,7 +6,8 @@ import {serverURL, fault} from './guest-protocol.js';
 export class GuestTransport extends EventTarget {
   constructor(server = '', {base = globalThis.location?.href, fetch = globalThis.fetch} = {}) {
     super(); this.base = serverURL(server, base); this.endpoint = new URL('api/guest-meetings', this.base);
-    this.fetch = fetch; this.abort = new AbortController(); this.closed = false; this.connected = false;
+    // Browser fetch is a Web IDL method and must retain its global receiver.
+    this.fetch = fetch.bind(globalThis); this.abort = new AbortController(); this.closed = false; this.connected = false;
   }
   emit(type, detail) {if (!this.closed) this.dispatchEvent(new CustomEvent(type, {detail}));}
   async request(path = '', {method = 'GET', body, authorization, keepalive = false} = {}) {

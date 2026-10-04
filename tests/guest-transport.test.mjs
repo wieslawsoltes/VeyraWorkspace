@@ -40,3 +40,20 @@ test('oversized streaming frames are rejected with bounded buffering', async () 
   transport.addEventListener('error', e => {message = e.detail.message; transport.close(false);});
   await transport.start(); assert.match(message, /too large/);
 });
+
+
+test('native-style fetch keeps its global receiver for requests, streams and leave', async () => {
+  const requests = [];
+  function nativeLike(url, options) {
+    assert.equal(this, globalThis, 'Web IDL fetch receiver must be the global object');
+    requests.push(url);
+    if (url.endsWith('/events')) return Promise.resolve(new Response('data: {"type":"ready"}\n\ndata: {"type":"ended"}\n\n', {headers: {'Content-Type': 'text/event-stream'}}));
+    return Promise.resolve(Response.json(membership));
+  }
+  const transport = new GuestTransport('https://meet.example.com', {fetch: nativeLike});
+  await transport.create('Alex', 'Meeting'); await transport.ice(); await transport.start();
+  assert.equal(transport.closed, true); assert.equal(requests.length, 3);
+  const leaving = new GuestTransport('https://meet.example.com', {fetch: nativeLike});
+  leaving.session = {...membership}; leaving.close();
+  assert.ok(requests.at(-1).endsWith('/leave'));
+});
