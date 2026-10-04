@@ -67,6 +67,7 @@ try:
         host=load(browser); errors=[]
         host.on('pageerror',lambda e: errors.append(str(e)))
         assert host.evaluate('window.__fixtureCaptures') == 0
+        assert host.evaluate("document.querySelector('#preview').srcObject===null")
         host.screenshot(path=str(OUT/'setup-desktop.png'),full_page=True)
         mobile=load(browser,{'width':390,'height':844})
         mobile.screenshot(path=str(OUT/'setup-mobile.png'),full_page=True)
@@ -81,7 +82,8 @@ try:
         result['checks'].append('Explicit microphone and camera preview controls use the real MediaController with synthetic sources')
         for kind in ['audio','video']: host.locator(f'#setup [data-device="{kind}"]').click()
         host.wait_for_function("window.__fixtureTracks.every(t=>t.readyState==='ended')")
-        result['checks'].append('Turning devices off stops all synthetic capture tracks')
+        assert host.evaluate("document.querySelector('#preview').srcObject===null")
+        result['checks'].append('Turning devices off stops all synthetic capture tracks and detaches inactive preview')
         host.evaluate("() => {window.__fixtureDevices.getUserMedia = async () => {throw new DOMException('Test permission denial', 'NotAllowedError');};}")
         host.locator('#setup [data-device="video"]').click()
         host.wait_for_function("document.querySelector('#device-status').textContent.includes('blocked')")

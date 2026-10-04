@@ -48,7 +48,10 @@ function updateDevices() {
     button.textContent = info.busy ? `Cancel ${kind === 'audio' ? 'microphone' : 'camera'}` : `${kind === 'audio' ? 'Microphone' : 'Camera'} ${active ? 'on' : info.status === 'error' || info.status === 'ended' || info.interrupted ? 'retry' : 'off'}`;
   }
   const video = media.track('video'); $('#preview').hidden = !video; $('#preview-avatar').hidden = !!video;
-  if ($('#preview').srcObject !== media.stream) $('#preview').srcObject = media.stream;
+  // Do not attach an empty/audio-only stream to an inactive preview: it can
+  // leave media metadata and page readiness pending, and needlessly retains capture.
+  const previewStream = video ? media.stream : null;
+  if ($('#preview').srcObject !== previewStream) $('#preview').srcObject = previewStream;
   if (video) $('#preview').play().catch(() => {});
   if (!session) meter.attach(media.track('audio'));
   const issues = Object.values(state).filter(s => s.issue).map(s => `${s.issue.title}. ${s.issue.detail}`);
