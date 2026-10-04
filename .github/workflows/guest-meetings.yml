@@ -1,0 +1,37 @@
+name: Guest meeting browser acceptance
+on:
+  pull_request:
+    paths: ['public/**', 'server/**', 'tests/guest*', 'package.json', '.github/workflows/guest-meetings.yml']
+  push:
+    branches: [main]
+    paths: ['public/**', 'server/**', 'tests/guest*', 'package.json', '.github/workflows/guest-meetings.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-guest-meetings:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned native browser runner
+        run: |
+          python -m pip install playwright==1.55.0
+          python -m playwright install --with-deps chromium
+      - name: Verify guest protocols and HTTP authorization
+        run: npm run test:guest
+      - name: Native link meetings, screen capture, three-party mesh and static direct pairing
+        run: python tests/guest_browser.py
+      - name: Retain evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-meeting-browser-evidence
+          path: tests/output/guest-native/
+          if-no-files-found: warn

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#6264a7"><meta name="referrer" content="no-referrer">
+  <meta name="description" content="Veyra guest meetings. No account required. Peer-to-peer audio, video, screen sharing and chat.">
+  <title>Guest meetings · Veyra</title><link rel="stylesheet" href="./meetings.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to meeting</a>
+  <header class="header"><a class="wordmark" href="./index.html">Veyra <span>Meet</span></a><span class="privacy-badge">No account required</span><a class="workspace-link" href="./index.html">Back to workspace</a></header>
+  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+  <main id="main">
+    <section id="setup" class="setup" aria-labelledby="setup-title">
+      <div class="intro"><span class="eyebrow">A simpler way to get together</span><h1 id="setup-title">Your meeting.<br>Just a little closer.</h1><p>Bring people together with a link. Talk, share your screen and keep the conversation going. No sign-in, no downloads.</p></div>
+      <div class="setup-grid">
+        <section class="preview-card" aria-label="Camera and microphone preview">
+          <div class="preview-surface"><video id="preview" muted autoplay playsinline hidden></video><div id="preview-avatar" class="preview-avatar">You</div><span class="preview-caption">Only you can see this preview</span></div>
+          <div class="preview-controls"><button type="button" data-device="audio" aria-pressed="false">Microphone off</button><button type="button" data-device="video" aria-pressed="false">Camera off</button><button id="flip-preview" type="button">Flip camera</button></div>
+          <div class="meter-row"><span>Microphone level</span><meter id="mic-meter" min="0" max="1" value="0" aria-label="Microphone input level"></meter></div>
+          <p id="device-status" class="muted">Camera and microphone stay off until you turn them on. Receive-only joining is supported.</p>
+        </section>
+        <section class="join-card" aria-label="Create or join a meeting">
+          <label>Your display name<input id="name" maxlength="80" autocomplete="nickname" placeholder="How should people call you?" required></label>
+          <div class="mode-picker" role="group" aria-label="Connection method"><button id="mode-link" type="button" aria-pressed="true">Meeting link</button><button id="mode-direct" type="button" aria-pressed="false">Direct pairing</button></div>
+          <div id="link-setup">
+            <label>Meeting title<input id="title" maxlength="100" value="Guest meeting"></label>
+            <label class="check"><input id="waiting-room" type="checkbox" checked>Let the host approve people before they join</label>
+            <button id="create" class="primary wide" type="button">Create a meeting</button>
+            <div class="separator"><span>or join an invitation</span></div>
+            <label>Meeting invitation<input id="invite" type="text" maxlength="3000" autocomplete="off" spellcheck="false" placeholder="Paste the full meeting link"></label>
+            <button id="join" class="wide" type="button">Join meeting</button>
+            <p class="hint">Anyone with the invite can request access. Share it only with people you trust.</p>
+          </div>
+          <div id="direct-setup" hidden>
+            <p class="muted">One-to-one P2P without a signaling service. Exchange an offer and answer using a trusted message channel. Pairing data expires after 10 minutes.</p>
+            <button id="direct-create" class="primary wide" type="button">Create a connection offer</button>
+            <div class="separator"><span>or accept an offer</span></div>
+            <label>Connection offer<textarea id="offer-input" rows="3" maxlength="100000" spellcheck="false" placeholder="Paste the complete offer JSON"></textarea></label>
+            <button id="direct-accept" class="wide" type="button">Accept offer and create answer</button>
+            <p class="hint">Pairing data contains network connection details. Direct internet connectivity may need configured STUN/TURN servers.</p>
+          </div>
+          <details class="advanced"><summary>Connection and device settings</summary>
+            <label>Guest signaling server<input id="server" type="url" placeholder="This site (or your HTTPS Veyra server)" autocomplete="off"></label>
+            <p class="hint">Only used for meeting links. An invitation may specify a server: review its address before joining. Your workspace cookies are never sent.</p>
+            <label>Direct-pairing ICE servers (JSON)<textarea id="ice" rows="2" spellcheck="false">[]</textarea></label>
+            <p class="hint">No third-party STUN server is contacted by default. Use your own ICE configuration; do not share privileged TURN credentials.</p>
+            <label>Microphone<select id="audio-device"><option value="">Automatic</option></select></label>
+            <label>Camera<select id="video-device"><option value="">Automatic</option></select></label>
+          </details>
+        </section>
+      </div>
+      <p class="setup-footnote">Media travels over WebRTC. A TURN relay may be needed on restrictive networks. This is not a Microsoft Teams meeting.</p>
+    </section>
+    <section id="waiting" class="waiting-card" hidden aria-labelledby="waiting-title"><div class="waiting-orbit" aria-hidden="true">…</div><h1 id="waiting-title">You’re in the waiting room.</h1><p>The host will let you in shortly. Your media is not being sent.</p><p id="waiting-status" class="muted"></p><button id="cancel-wait" class="danger" type="button">Leave waiting room</button></section>
+    <section id="meeting" class="meeting" hidden aria-label="Active meeting">
+      <div class="meeting-heading"><div><h1 id="meeting-title">Guest meeting</h1><p id="connection-status" class="muted" role="status">Connecting…</p></div><div class="heading-actions"><span id="duration">00:00</span><button id="copy-invite" type="button">Copy invitation</button><button id="fullscreen" type="button">Full screen</button></div></div>
+      <section id="pairing" class="pairing" hidden aria-labelledby="pairing-title"><h2 id="pairing-title">Exchange connection details</h2><p id="pairing-help"></p><label>Send this to the other person<textarea id="pairing-output" rows="3" readonly spellcheck="false"></textarea></label><button id="copy-pairing" type="button">Copy connection details</button><div id="answer-box"><label>Their answer<textarea id="answer-input" rows="3" maxlength="100000" spellcheck="false"></textarea></label><button id="apply-answer" class="primary" type="button">Complete connection</button></div></section>
+      <div class="meeting-body"><section id="stage" class="stage" aria-label="Participants and presentations"><div id="tiles" class="tiles"></div><div id="reaction-toast" class="reaction-toast" role="status" aria-live="polite" hidden></div><button id="play-audio" class="play-audio primary" type="button" hidden>Enable meeting audio</button></section>
+        <aside id="side-panel" class="side-panel" aria-label="Meeting sidebar" hidden><div class="panel-tabs" role="tablist"><button id="people-tab" role="tab" aria-selected="true" aria-controls="people-panel">People</button><button id="chat-tab" role="tab" aria-selected="false" aria-controls="chat-panel">Chat</button><button id="close-panel" type="button" aria-label="Close sidebar">×</button></div>
+          <section id="people-panel" role="tabpanel" aria-labelledby="people-tab"><div id="host-controls" hidden><button id="lock" type="button" aria-pressed="false">Lock meeting</button><button id="end" class="danger" type="button">End for everyone</button></div><h2>In this meeting</h2><div id="people"></div><div id="waiting-list"></div><p class="hint">Display names are chosen by guests, not verified identities.</p></section>
+          <section id="chat-panel" role="tabpanel" aria-labelledby="chat-tab" hidden><p class="hint">Peer-to-peer chat. New messages go only to currently connected peers and are kept in this tab’s memory.</p><ol id="messages" aria-live="polite" aria-relevant="additions" aria-label="Meeting messages"></ol><form id="chat-form"><label class="sr-only" for="message">Message</label><textarea id="message" maxlength="2000" rows="2" placeholder="Write a message…"></textarea><button class="primary" type="submit">Send</button></form></section>
+        </aside>
+      </div>
+      <div class="meeting-toolbar" role="group" aria-label="Meeting controls"><button type="button" data-device="audio" aria-pressed="false">Microphone off</button><button type="button" data-device="video" aria-pressed="false">Camera off</button><button id="share-screen" type="button" aria-pressed="false">Share screen</button><button id="hand" type="button" aria-pressed="false">Raise hand</button><button id="toggle-people" type="button">People</button><button id="toggle-chat" type="button">Chat</button><details class="more-controls"><summary>More</summary><div><label class="check"><input id="share-audio" type="checkbox">Include shared audio when supported</label><button id="flip" type="button">Flip camera</button><div id="reactions" class="reactions" role="group" aria-label="Send a reaction"></div><p id="screen-support" class="hint"></p><p id="network-stats" class="hint">Connection statistics will appear here.</p></div></details><button id="leave" class="danger-fill" type="button">Leave</button></div>
+      <div id="audio-sinks" hidden></div>
+    </section>
+    <section id="ended" class="waiting-card" hidden><h1>You’ve left the meeting.</h1><p id="ended-reason">Your camera, microphone and screen capture have stopped.</p><a class="button primary" href="./meet.html">Start another meeting</a><a class="button" href="./index.html">Return to workspace</a></section>
+  </main>
+  <script type="module" src="./meetings.js"></script><noscript>Enable JavaScript to join a Veyra meeting.</noscript>
+</body>
+</html>

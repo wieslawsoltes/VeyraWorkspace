@@ -1,0 +1,2 @@
+.topbar .guest-meeting-entry{font-size:12px;white-space:nowrap;min-height:32px;padding:6px 10px;text-decoration:none;margin-right:6px;color:inherit}
+@media(max-width:640px){.topbar .guest-meeting-entry{font-size:10px;padding:6px;margin-right:0;max-width:68px;white-space:normal;text-align:center;line-height:1.2}}
