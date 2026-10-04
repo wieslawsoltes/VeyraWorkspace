@@ -1,19 +1,36 @@
 # Guest meeting validation record
 
-## Implemented local checks
+## Verified implementation
 
-- Node.js 22.16.0: `node --test tests/guest-*.test.mjs` — **41 passed, 0 failed, 0 skipped** (18 HTTP/security, 18 media/protocol, 5 transport tests).
-- The original `public/core/media.js` was retrieved from GitHub and reconstructed byte-identically (blob `1b83008908ebccf12b30e8c516bd55b47b2612bc`); it is not modified. The original media test fixture is reused.
-- JavaScript syntax checks are run separately on new and edited scripts. Python acceptance scripts are syntax-compiled.
+Implementation commit: `5470136ce10c6f3421211c85857430e444819a62` on `feature/no-login-p2p-meetings` (PR #2). The following results were observed on October 4, 2026. Documentation-only changes after this commit do not change the tested application code.
 
-## Native local environment limitation
+- **Full repository core: 140 passed, 0 failed, 0 skipped.** Source checksums, JavaScript module/import validation, and static build also passed in [CI run 37209437025](https://github.com/wieslawsoltes/VeyraWorkspace/actions/runs/37209437025).
+- **Existing native workspace/browser acceptance: passed** in the same run, including root and project-subpath media checks.
+- **Guest regressions: 42 passed, 0 failed, 0 skipped** (18 HTTP/security, 18 media/protocol, 6 transport). They passed both locally on Node.js 22.16.0 and in GitHub Actions on Node.js 22.23.3.
+- **Native guest meeting acceptance: all nine scenario groups passed**, with no uncaught page errors or screenshot failures, in [run 37209437060](https://github.com/wieslawsoltes/VeyraWorkspace/actions/runs/37209437060). This used the complete workspace server, Chromium 140, Playwright 1.55.0 and a virtual desktop. [Browser evidence artifact](https://github.com/wieslawsoltes/VeyraWorkspace/actions/runs/37209437060/artifacts/11304889444) contains the report and desktop/mobile/presentation screenshots.
 
-Native Chromium navigation to the loopback HTTP fixture was attempted and failed with `net::ERR_BLOCKED_BY_ADMINISTRATOR`. A separate exploratory `about:blank` native RTCPeerConnection attempt gathered **zero ICE candidates** on both sides and did **not** connect. Neither attempt is counted as a pass. The production pairing path now fails explicitly when gathering yields zero candidates. No browser/network policy was bypassed.
+## Native browser coverage
 
-The UI-only component harness is separate and explicitly substitutes synthetic capture and a local SHA-256 adapter in `about:blank`. It passed five component scenarios. Its scope is responsive rendering, explicit preview controls, capture cleanup, permission-denial feedback and direct-pairing setup navigation—not secure-origin permissions, signaling, native capture, or transport.
+1. Desktop/mobile setup, no automatic capture request, and detached inactive preview.
+2. Invitation joining, waiting-room admission, receive-only guests and actual RTP media between separate browser contexts.
+3. Actual RTCDataChannel chat, escaped markup and propagated raised hands.
+4. Native screen selection and received screen video while the original camera and microphone remain live.
+5. Three-person mesh negotiation and a late-joining presentation receiver.
+6. Meeting lock rejects new entry without disrupting existing connections.
+7. Stopping screen sharing preserves camera capture; ending for everyone disconnects all clients and releases host devices.
+8. Broker-free offer/answer pairing, RTP and chat on a GitHub Pages-style static project subpath.
+9. The original workspace remains available with exactly one guest-meeting entry.
 
-## GitHub acceptance workflow
+Native tests use Chromium-generated synthetic camera/microphone devices and an automated native screen chooser, **not physical-device testing**. HTTP, session descriptions, ICE negotiation, RTP, data channels, screen capture and the application security policy are not replaced with component fixtures. The production Content Security Policy was not relaxed for tests.
 
-`.github/workflows/guest-meetings.yml` runs the native server/browser suite independently of existing CI and preserves `tests/output/guest-native/` on success or failure. Existing CI also executes the new Node tests through its existing `tests/*.test.mjs` glob. The full original repository test suite and actual native meeting acceptance must be evaluated on GitHub Actions; they were not claimed to pass from the partial local source reconstruction.
+## Local component scope and earlier failures
 
-Physical iPhone/Android device behavior, multiple real networks/NATs, production TURN, sustained eight-person bandwidth/CPU load, production reverse proxy behavior and security/load auditing remain deployment acceptance tasks. No production public signaling/TURN backend was provisioned in this change.
+Five separately scoped UI component scenarios passed locally: responsive setup, explicit device preview, capture cleanup/preview detachment, permission-denial feedback and direct-pairing setup navigation. That harness injects synthetic capture into `about:blank`; it is not evidence of native transport acceptance.
+
+Local native loopback navigation was blocked by `net::ERR_BLOCKED_BY_ADMINISTRATOR`. A separate exploratory local RTC attempt gathered zero candidates and did not connect. No policy was bypassed, and those attempts remain failures. The production manual pairing path reports zero-candidate failure explicitly. Native transport acceptance was subsequently established on GitHub Actions as recorded above.
+
+Initial GitHub attempts exposed test-runner screenshot/CSP polling problems and a real native-fetch receiver binding bug. These were fixed rather than skipped: inactive preview detachment, a virtual desktop, CSP-compatible test polling, and globally bound transport fetch with a receiver regression. The original `public/core/media.js` remains unchanged (Git blob `1b83008908ebccf12b30e8c516bd55b47b2612bc`).
+
+## Remaining deployment acceptance
+
+Physical iPhone/Android behavior, multiple real networks/NATs, production TURN, sustained eight-person bandwidth/CPU load, reverse-proxy operation, and independent security/load auditing remain deployment acceptance tasks. No public signaling/TURN backend was provisioned. GitHub Pages alone cannot host the automatic-invitation broker. This record does not claim full Microsoft Teams parity or production certification.
