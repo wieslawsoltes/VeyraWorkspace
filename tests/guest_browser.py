@@ -28,7 +28,14 @@ INSTRUMENT = r'''(() => {
 class QuietHandler(SimpleHTTPRequestHandler):
     def log_message(self,*_): pass
 report={'scope':'isolated guest HTTP service' if args.fixture else 'complete workspace + guest server',
-        'hardware':'Chromium-generated camera/microphone and native automated screen picker, not physical-device testing', 'checks':[], 'pageErrors':[]}
+        'hardware':'Chromium-generated camera/microphone and native automated screen picker, not physical-device testing', 'checks':[], 'pageErrors':[], 'screenshotErrors':[]}
+def screenshot(target, filename):
+    # Evidence collection must not prevent transport assertions from running.
+    # Any capture failure remains explicit in the report, never a visual pass.
+    try: target.screenshot(path=str(OUT/filename),full_page=True,timeout=5000)
+    except Exception as error:
+        report['screenshotErrors'].append({'file':filename,'error':str(error)})
+        print('SCREENSHOT FAILED:',filename,str(error),flush=True)
 def passed(message):
     report['checks'].append(message); print('PASS:',message,flush=True)
 server=None; static=None; browser=None; pages=[]
@@ -52,7 +59,7 @@ try:
         threading.Thread(target=static.serve_forever,daemon=True).start()
         static_url=f'http://127.0.0.1:{static.server_address[1]}/VeyraWorkspace/meet.html'
         with sync_playwright() as p:
-            launch={'headless':True,'args':['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream','--auto-select-desktop-capture-source=Entire screen']}
+            launch={'headless':os.environ.get('GUEST_HEADED')!='true','args':['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream','--auto-select-desktop-capture-source=Entire screen']}
             if os.environ.get('CHROMIUM_PATH'): launch['executable_path']=os.environ['CHROMIUM_PATH']
             browser=p.chromium.launch(**launch)
             def page(url=origin+'/meet.html',mobile=False):
@@ -64,11 +71,11 @@ try:
                 return target
             def connected(target,count=1):
                 target.wait_for_function('(count)=>window.__guestPCs.filter(p=>p.connectionState===\'connected\').length>=count',arg=count,timeout=20000)
-            host=page();host.screenshot(path=str(OUT/'setup-desktop.png'),full_page=True)
-            mobile=page(mobile=True);assert mobile.evaluate('document.documentElement.scrollWidth<=innerWidth');mobile.screenshot(path=str(OUT/'setup-mobile.png'),full_page=True);mobile.close()
+            host=page();screenshot(host,'setup-desktop.png')
+            mobile=page(mobile=True);assert mobile.evaluate('document.documentElement.scrollWidth<=innerWidth');screenshot(mobile,'setup-mobile.png');mobile.close()
             assert host.evaluate('window.__guestRequests')==0
             passed('Native root/subpath-ready startup, responsive preview and no permission requests on open')
-            host.fill('#name','Alex Morgan');host.fill('#title','Guest collaboration review')
+            host.bring_to_front();host.fill('#name','Alex Morgan');host.fill('#title','Guest collaboration review')
             host.locator('#setup [data-device="audio"]').click();host.locator('#setup [data-device="video"]').click()
             host.wait_for_function('window.__guestCaptures.length===2')
             host.click('#create');expect(host.locator('#meeting')).to_be_visible(timeout=15000)
@@ -86,11 +93,11 @@ try:
             guest.click('#hand');host.wait_for_function("[...document.querySelectorAll('.tile:not(.local) .hand-marker')].some(x=>!x.hidden)")
             passed('Real data-channel chat escapes markup; raised hands propagate without broker chat storage')
             host.click('#close-panel');guest.click('#close-panel')
-            camera=host.evaluate("window.__guestPCs[0].getTransceivers()[1].sender.track.id")
-            host.click('#share-screen');host.wait_for_function("document.querySelector('#share-screen').getAttribute('aria-pressed')==='true'",timeout=15000)
+            camera=host.evaluate("window.__guestPCs.find(p=>p.connectionState==='connected').getTransceivers()[1].sender.track.id")
+            host.bring_to_front();host.click('#share-screen');host.wait_for_function("document.querySelector('#share-screen').getAttribute('aria-pressed')==='true'",timeout=15000)
             guest.wait_for_function("document.querySelector('.tile.screen:not(.local) video')?.videoWidth>0",timeout=15000)
-            assert host.evaluate("window.__guestPCs[0].getTransceivers()[1].sender.track.id")==camera
-            assert host.evaluate("window.__guestPCs[0].getTransceivers()[0].sender.track.readyState")=='live'
+            assert host.evaluate("window.__guestPCs.find(p=>p.connectionState==='connected').getTransceivers()[1].sender.track.id")==camera
+            assert host.evaluate("window.__guestPCs.find(p=>p.connectionState==='connected').getTransceivers()[0].sender.track.readyState")=='live'
             passed('Native screen selection transmits screen RTP while camera and microphone remain live')
             third=page(invitation);third.fill('#name','Jordan Lee');third.click('#join');expect(third.locator('#waiting')).to_be_visible();host.click('#toggle-people')
             host.locator('#waiting-list').get_by_role('button',name='Admit',exact=True).click();expect(third.locator('#meeting')).to_be_visible()
@@ -100,9 +107,9 @@ try:
             host.click('#lock');host.wait_for_function("document.querySelector('#lock').getAttribute('aria-pressed')==='true'")
             fourth=page(invitation);fourth.fill('#name','Locked out');fourth.click('#join');expect(fourth.locator('#notice')).to_contain_text('locked');assert fourth.locator('#setup').is_visible();fourth.close()
             passed('Host lock rejects a new participant without disturbing existing connections')
-            host.click('#close-panel');guest.screenshot(path=str(OUT/'meeting-presentation.png'),full_page=True)
-            host.click('#share-screen');guest.wait_for_function("!document.querySelector('.tile.screen:not(.local)')")
-            assert host.evaluate("window.__guestPCs[0].getTransceivers()[1].sender.track.readyState")=='live'
+            host.click('#close-panel');screenshot(guest,'meeting-presentation.png')
+            host.bring_to_front();host.click('#share-screen');guest.wait_for_function("!document.querySelector('.tile.screen:not(.local)')")
+            assert host.evaluate("window.__guestPCs.find(p=>p.connectionState==='connected').getTransceivers()[1].sender.track.readyState")=='live'
             host.click('#toggle-people');host.once('dialog',lambda dialog:dialog.accept());host.click('#end')
             for target in [host,guest,third]: expect(target.locator('#ended')).to_be_visible(timeout=10000)
             assert host.evaluate("window.__guestCaptures.every(t=>t.readyState==='ended')")
@@ -126,6 +133,23 @@ try:
             report['status']='pass';browser.close();browser=None
 except Exception as error:
     report['status']='fail';report['error']=str(error)
+    report['diagnostics']=[]
+    for index,target in enumerate(pages):
+        if target.is_closed(): continue
+        try:
+            report['diagnostics'].append({'page':index, 'state':target.evaluate('''() => ({
+              readyState:document.readyState,fonts:document.fonts.status,
+              notice:document.querySelector('#notice')?.textContent,
+              connection:document.querySelector('#connection-status')?.textContent,
+              captures:window.__guestCaptures?.map(t=>({kind:t.kind,state:t.readyState})),
+              peers:window.__guestPCs?.map(p=>({connection:p.connectionState,ice:p.iceConnectionState,
+                gathering:p.iceGatheringState,signaling:p.signalingState,
+                local:p.localDescription?.type,remote:p.remoteDescription?.type,
+                tracks:p.getTransceivers().map(t=>({direction:t.currentDirection,
+                  send:t.sender.track?.kind,sendState:t.sender.track?.readyState,
+                  receive:t.receiver.track.kind,receiveState:t.receiver.track.readyState,muted:t.receiver.track.muted}))}))
+            })''')})
+        except Exception as diagnostic_error: report['diagnostics'].append({'page':index,'error':str(diagnostic_error)})
     raise
 finally:
     if browser:

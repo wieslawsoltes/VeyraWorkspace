@@ -27,7 +27,9 @@ jobs:
       - name: Verify guest protocols and HTTP authorization
         run: npm run test:guest
       - name: Native link meetings, screen capture, three-party mesh and static direct pairing
-        run: python tests/guest_browser.py
+        env:
+          GUEST_HEADED: 'true'
+        run: xvfb-run -a --server-args='-screen 0 1600x1000x24' python tests/guest_browser.py
       - name: Retain evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
