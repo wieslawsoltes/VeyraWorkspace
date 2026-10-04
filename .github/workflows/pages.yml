@@ -72,7 +72,7 @@ jobs:
             if [ "$attempt" = 12 ]; then exit 1; fi
             sleep 5
           done
-          for asset in '' app.js styles.css auth.html core/media.js core/calls.js core/call-state.js ui/device-panel.js; do
+          for asset in '' app.js styles.css auth.html core/media.js core/calls.js core/call-state.js ui/device-panel.js meet.html meetings.js meetings.css core/guest-transport.js core/guest-protocol.js core/meeting-session.js core/ice-lease.js; do
             curl --fail --silent --show-error --location --retry 3 "${PAGE_URL}${asset}" -o /dev/null
           done
           printf 'Published and HTTP-verified: %s\nCommit: %s\n' "$PAGE_URL" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

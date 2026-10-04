@@ -1,0 +1,35 @@
+name: Source and browser packages
+on:
+  push:
+    branches: [main, feature/no-login-p2p-meetings]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate the archived revision
+        run: |
+          sha256sum --check --strict MANIFEST.sha256
+          npm run check
+          npm test
+          npm run build
+      - name: Package tracked source and static application
+        run: |
+          mkdir -p /tmp/veyra-packages
+          git archive --format=zip --prefix=VeyraWorkspace/ --output=/tmp/veyra-packages/VeyraWorkspace-source.zip HEAD
+          (cd dist && zip -qr /tmp/veyra-packages/VeyraWorkspace-browser.zip .)
+          git rev-parse HEAD > /tmp/veyra-packages/COMMIT.txt
+          (cd /tmp/veyra-packages && sha256sum *.zip COMMIT.txt > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: veyra-source-and-browser
+          path: /tmp/veyra-packages/
+          if-no-files-found: error
