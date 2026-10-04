@@ -2,7 +2,7 @@
 
 ## Verified implementation
 
-Implementation commit: `5470136ce10c6f3421211c85857430e444819a62` on `feature/no-login-p2p-meetings` (PR #2). The following results were observed on October 4, 2026. Documentation-only changes after this commit do not change the tested application code.
+Implementation commit: `5470136ce10c6f3421211c85857430e444819a62` on `feature/no-login-p2p-meetings` (PR #2). The following results were observed on October 4, 2026. These results apply to that initial implementation; later continuation results are recorded below.
 
 - **Full repository core: 140 passed, 0 failed, 0 skipped.** Source checksums, JavaScript module/import validation, and static build also passed in [CI run 37209437025](https://github.com/wieslawsoltes/VeyraWorkspace/actions/runs/37209437025).
 - **Existing native workspace/browser acceptance: passed** in the same run, including root and project-subpath media checks.
@@ -34,3 +34,10 @@ Initial GitHub attempts exposed test-runner screenshot/CSP polling problems and 
 ## Remaining deployment acceptance
 
 Physical iPhone/Android behavior, multiple real networks/NATs, production TURN, sustained eight-person bandwidth/CPU load, reverse-proxy operation, and independent security/load auditing remain deployment acceptance tasks. No public signaling/TURN backend was provisioned. GitHub Pages alone cannot host the automatic-invitation broker. This record does not claim full Microsoft Teams parity or production certification.
+
+
+## PR #2 continuation: host controls and long-call recovery
+
+The continuation adds host handover, invitation replacement, live admission policy, in-call device selectors, a signaling inactivity watchdog and explicit retry/leave UI, temporary TURN renewal, and independent shared-audio interruption cleanup. Authorization and invitation checks are repeated after asynchronous body reads; tests exercise slow-body revocation races.
+
+Local continuation verification: **163 repository tests passed, zero failed/skipped**, including **65 guest regression tests**. JavaScript module/import checks and the static build passed. A new local native-browser attempt remained blocked by `ERR_BLOCKED_BY_ADMINISTRATOR` and is not counted as a pass. The extended GitHub browser suite checks the new controls and native reconnect behavior alongside the original scenarios; consult PR #2's exact-head checks for its result. No new physical-device, real TURN relay, eight-person sustained-load, or production certification claim is made.

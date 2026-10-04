@@ -57,3 +57,40 @@ test('native-style fetch keeps its global receiver for requests, streams and lea
   leaving.session = {...membership}; leaving.close();
   assert.ok(requests.at(-1).endsWith('/leave'));
 });
+
+test('silent signaling headers time out instead of leaving joining stuck forever', async () => {
+  const transport = new GuestTransport('https://meet.example.com', {streamTimeoutMs: 20, fetch: (url, {signal}) => new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {once: true});
+  })});
+  transport.session = {...membership}; let message;
+  transport.addEventListener('error', e => {message = e.detail.message; transport.close(false);});
+  await transport.start(); assert.match(message, /stopped responding/); assert.equal(transport.closed, true);
+});
+
+test('a stalled SSE body is aborted and reported even after a ready event', async () => {
+  const transport = new GuestTransport('https://meet.example.com', {streamTimeoutMs: 20, fetch: async (url, {signal}) => new Response(new ReadableStream({start(controller) {
+    controller.enqueue(new TextEncoder().encode('data: {"type":"ready"}\n\n'));
+    signal.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), {once: true});
+  }}), {headers: {'Content-Type': 'text/event-stream'}})});
+  transport.session = {...membership}; let wasConnected = false;
+  transport.addEventListener('connection', e => {wasConnected ||= e.detail.connected;});
+  transport.addEventListener('error', () => transport.close(false));
+  await transport.start(); assert.equal(wasConnected, true); assert.equal(transport.closed, true);
+});
+
+test('explicit reconnect replaces only the stream and keeps the participant capability', async () => {
+  let count = 0; const options = [];
+  const transport = new GuestTransport('https://meet.example.com', {fetch: async (url, init) => {
+    options.push(init); count++;
+    return new Response(new ReadableStream({start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"type":"ready"}\n\n'));
+      if (count === 2) {controller.enqueue(new TextEncoder().encode('data: {"type":"ended"}\n\n')); controller.close();}
+      else init.signal.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), {once: true});
+    }}), {headers: {'Content-Type': 'text/event-stream'}});
+  }});
+  transport.session = {...membership}; const errors = [];
+  transport.addEventListener('error', e => errors.push(e.detail));
+  transport.addEventListener('event', e => {if (e.detail.type === 'ready' && count === 1) transport.reconnect();});
+  await transport.start(); assert.equal(count, 2); assert.equal(errors.length, 0);
+  assert.equal(options[0].headers.Authorization, options[1].headers.Authorization);
+});

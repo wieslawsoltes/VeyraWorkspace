@@ -50,7 +50,7 @@ export function createGuestMeetings(options = {}) {
   }
   const personDTO = p => ({id: p.id, name: p.name, host: p.host, ...p.state});
   function snapshot(room, person) {
-    return {type: 'roster', revision: room.revision, title: room.title, locked: room.locked, expiresAt: room.expiresAt, host: person.host,
+    return {type: 'roster', revision: room.revision, title: room.title, locked: room.locked, waitingRoom: room.waitingRoom, expiresAt: room.expiresAt, host: person.host,
       hostConnected: [...room.people.values()].some(p => p.host && !!p.res),
       approved: person.approved, selfId: person.id,
       peers: person.approved ? [...room.people.values()].filter(p => p.joined && p.id !== person.id).map(personDTO) : [],
@@ -90,12 +90,33 @@ export function createGuestMeetings(options = {}) {
       secretHash: digest(secret), state: mediaState(), touched: now(), res: null};
     return {person, secret};
   }
+  // Authorization must be rechecked after each request-body await. A host can
+  // transfer control, a participant can leave, or a meeting can expire meanwhile.
+  function active(room, person, {host = false, joined = false} = {}) {
+    if (rooms.get(room.id) !== room || room.expiresAt <= now()) {
+      if (rooms.get(room.id) === room) finish(room, 'expired');
+      throw fault('This meeting has ended or expired.', 404);
+    }
+    if (room.people.get(person.id) !== person) throw fault('Meeting session has ended.', 401);
+    if (!person.res && now() - person.touched > grace) {
+      remove(room, person, 'expired'); throw fault('Meeting session has expired.', 401);
+    }
+    if (host && !person.host) throw fault('Only the host may change meeting access.', 403);
+    if (joined && (!person.approved || !person.joined || !person.res)) throw fault('Join the meeting first.', 403);
+  }
+  function rotateInvitation(room, host) {
+    const inviteKey = token(); room.inviteHash = digest(inviteKey);
+    for (const person of room.people.values()) send(person, {type: 'invitation-invalidated'});
+    // Only the current host gets the replacement invitation. Never put it in a roster.
+    send(host, {type: 'invitation', inviteKey});
+    return inviteKey;
+  }
   function authenticate(req, room) {
     const secret = (req.headers.authorization || '').replace(/^Bearer /, '');
     if (!TOKEN_PATTERN.test(secret)) throw fault('Meeting session is not valid.', 401);
     const hash = digest(secret), person = [...room.people.values()].find(p => timingSafeEqual(hash, p.secretHash));
     if (!person) throw fault('Meeting session has ended.', 401);
-    person.touched = now(); return person;
+    active(room, person); person.touched = now(); return person;
   }
   async function route(req, res, url) {
     if (!enabled || closed) throw fault('Guest meetings are disabled on this server.', 503);
@@ -127,7 +148,7 @@ export function createGuestMeetings(options = {}) {
       const inviteKey = token(), room = {id: id(), title: text(input.title || 'Guest meeting', 100, 'Meeting title'),
         revision: 0, inviteHash: digest(inviteKey), expiresAt: now() + ttl, locked: false, waitingRoom: input.waitingRoom !== false, people: new Map([[person.id, person]])};
       // Recheck after the body await: concurrent requests must not evade capacity.
-      if (rooms.size >= maxRooms) throw fault('Meeting capacity reached.', 503);
+      if (closed || rooms.size >= maxRooms) throw fault('Meeting capacity reached or service stopped.', 503);
       rooms.set(room.id, room);
       return json(res, 201, {roomId: room.id, inviteKey, participantId: person.id, participantToken: secret, ...snapshot(room, person)});
     }
@@ -139,6 +160,7 @@ export function createGuestMeetings(options = {}) {
       rate(`join:${address}`, 60, 3600000);
       if (!equal((req.headers.authorization || '').replace(/^Invite /, ''), room.inviteHash)) throw fault('Invalid or expired invitation.', 403);
       const input = await body(req);
+      if (!equal((req.headers.authorization || '').replace(/^Invite /, ''), room.inviteHash)) throw fault('Invalid or expired invitation.', 403);
       if (room.locked) throw fault('The host has locked this meeting.', 423);
       if (!rooms.has(room.id) || room.expiresAt <= now()) throw fault('This meeting has ended.', 404);
       if (room.people.size >= MAX_GUEST_PEERS + 16 || (room.waitingRoom && [...room.people.values()].filter(p => !p.approved).length >= 16)) throw fault('This meeting and its waiting room are full.', 409);
@@ -155,43 +177,56 @@ export function createGuestMeetings(options = {}) {
       person.res = res; send(person, {...snapshot(room, person), type: 'ready'});
       res.on('close', () => disconnect(room, person, res)); return;
     }
-    if (action === 'leave' && req.method === 'POST') {await body(req); remove(room, person, 'left'); return json(res, 200, {ok: true});}
+    if (action === 'leave' && req.method === 'POST') {await body(req); active(room, person); remove(room, person, 'left'); return json(res, 200, {ok: true});}
     if (!person.approved) throw fault('Wait for the host to admit you.', 403);
     if (action === 'ice' && req.method === 'GET') {
       rate(`ice:${person.id}`, 6);
-      const iceServers = structuredClone(ice);
+      const iceServers = structuredClone(ice); let expiresAt = null;
       if (turnSecret) {
         const expires = Math.min(Math.floor(room.expiresAt / 1000), Math.floor(now() / 1000) + 600), username = `${expires}:guest-${person.id}`;
+        expiresAt = expires * 1000;
         iceServers.push({urls: turnUrls, username, credential: createHmac('sha1', turnSecret).update(username).digest('base64')});
       }
-      return json(res, 200, {iceServers});
+      return json(res, 200, {iceServers, expiresAt});
     }
     if (action === 'presence' && req.method === 'POST') {
       const input = await body(req);
+      active(room, person);
       if (!person.res) throw fault('Reconnect signaling before joining media.', 409);
-      if (!room.people.has(person.id)) throw fault('Meeting session has ended.', 401);
       person.state = mediaState(input); person.joined = true; roster(room); return json(res, 200, snapshot(room, person));
     }
     if (action === 'signal' && req.method === 'POST') {
       if (!person.joined || !person.res) throw fault('Join the meeting first.', 403);
       const input = await body(req), target = room.people.get(input.target);
-      if (!room.people.has(person.id)) throw fault('Meeting session has ended.', 401);
+      active(room, person, {joined: true});
       if (!target?.joined || !target.res || target.id === person.id) throw fault('The participant is no longer connected.', 404);
       send(target, {type: 'signal', from: person.id, name: person.name, ...rtcSignal(input)}); return json(res, 200, {ok: true});
     }
     if (action === 'control' && req.method === 'POST') {
       if (!person.host) throw fault('Only the host may change meeting access.', 403);
       const input = await body(req);
-      if (!room.people.has(person.id) || !rooms.has(room.id)) throw fault('Meeting session has ended.', 401);
+      active(room, person, {host: true});
       if (input.action === 'end') {finish(room); return json(res, 200, {ok: true});}
       if (input.action === 'lock') {
         if (typeof input.locked !== 'boolean') throw fault('locked must be a boolean.'); room.locked = input.locked;
+      } else if (input.action === 'waiting-room') {
+        if (typeof input.enabled !== 'boolean') throw fault('enabled must be a boolean.');
+        // Changing the policy applies to future joins, never auto-admits a waiting guest.
+        room.waitingRoom = input.enabled;
+      } else if (input.action === 'rotate-invitation') {
+        const inviteKey = rotateInvitation(room, person); roster(room);
+        return json(res, 200, {ok: true, inviteKey});
       } else {
         const target = room.people.get(input.participantId);
         if (!target || target.host) throw fault('Participant not found.', 404);
         if (input.action === 'admit') {
           if (!target.approved && [...room.people.values()].filter(p => p.approved).length >= MAX_GUEST_PEERS) throw fault('This meeting is full.', 409);
           target.approved = true; send(target, {type: 'admitted'});
+        } else if (input.action === 'transfer-host') {
+          if (!target.approved || !target.joined || !target.res || target.res.destroyed || target.res.writableEnded)
+            throw fault('Choose an admitted, connected participant as the new host.', 409);
+          person.host = false; target.host = true;
+          rotateInvitation(room, target);
         } else if (input.action === 'remove') remove(room, target);
         else throw fault('Unknown host control.');
       }

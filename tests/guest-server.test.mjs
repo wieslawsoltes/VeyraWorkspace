@@ -201,3 +201,114 @@ test('same-origin header-authenticated GET works without Origin; mutations still
   const mutation = await fetch(`${f.origin}/api/guest-meetings/${host.roomId}/control`, {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify({action: 'end'})});
   assert.equal(mutation.status, 403);
 });
+
+// Hold a body after the server has received its authenticated headers. This tests
+// revocation at the actual asynchronous boundary rather than a sequential mock.
+async function delayedRequest(f, person, action, authorization = f.auth(person)) {
+  let resolveResponse, rejectResponse;
+  const response = new Promise((resolve, reject) => {resolveResponse = resolve; rejectResponse = reject;});
+  const seen = new Promise(resolve => f.server.once('request', () => setImmediate(resolve)));
+  const req = http.request(`${f.origin}/api/guest-meetings/${person.roomId}/${action}`, {
+    method: 'POST', headers: {Origin: f.origin, Authorization: authorization, 'Content-Type': 'application/json'}
+  }, res => {
+    let body = ''; res.setEncoding('utf8'); res.on('data', chunk => {body += chunk;});
+    res.on('end', () => resolveResponse({status: res.statusCode, data: JSON.parse(body)}));
+  });
+  req.on('error', rejectResponse); req.write('{'); await seen;
+  return {finish(body) {req.end(JSON.stringify(body).slice(1)); return response;}};
+}
+
+test('host handover atomically revokes old host powers and keeps existing media membership', async t => {
+  const f = await fixture(t), host = await f.create({waitingRoom: false}), guest = (await f.join(host)).data;
+  await f.stream(host); const events = await f.stream(guest); await f.presence(host); await f.presence(guest);
+  assert.equal((await f.command(host, 'transfer-host', {participantId: guest.participantId})).status, 200);
+  const invite = await events.next('invitation'); assert.match(invite.inviteKey, /^[\w-]{43}$/);
+  assert.equal((await f.command(host, 'end')).status, 403);
+  assert.equal((await f.command(guest, 'lock', {locked: true})).status, 200);
+  const self = (await f.presence(guest)).data;
+  assert.equal(self.host, true); assert.equal(self.peers.length, 1); assert.equal(self.peers[0].host, false);
+  assert.equal((await f.presence(host)).data.host, false);
+  await f.command(guest, 'lock', {locked: false});
+  assert.equal((await f.join(host)).status, 403);
+  assert.equal((await f.join({...host, inviteKey: invite.inviteKey})).status, 201);
+});
+
+test('only an admitted online media participant can receive host powers', async t => {
+  const f = await fixture(t), host = await f.create(), guest = (await f.join(host)).data;
+  await f.stream(guest);
+  assert.equal((await f.command(host, 'transfer-host', {participantId: guest.participantId})).status, 409);
+  await f.command(host, 'admit', {participantId: guest.participantId});
+  assert.equal((await f.command(host, 'transfer-host', {participantId: guest.participantId})).status, 409);
+  assert.equal((await f.command(guest, 'transfer-host', {participantId: host.participantId})).status, 403);
+  assert.equal((await f.command(host, 'transfer-host', {participantId: host.participantId})).status, 404);
+});
+
+test('waiting-room policy changes only future joins and never admit existing requests implicitly', async t => {
+  const f = await fixture(t), host = await f.create(), waiting = (await f.join(host)).data;
+  assert.equal((await f.command(host, 'waiting-room', {enabled: false})).status, 200);
+  assert.equal((await f.join(host)).data.approved, true);
+  assert.equal((await f.request(`/${host.roomId}/ice`, undefined, f.auth(waiting))).status, 403);
+  await f.command(host, 'waiting-room', {enabled: true});
+  assert.equal((await f.join(host)).data.approved, false);
+  assert.equal((await f.command(host, 'waiting-room', {enabled: 'false'})).status, 400);
+  await f.stream(host); assert.equal((await f.presence(host)).data.waitingRoom, true);
+});
+
+test('invitation rotation invalidates old links without removing admitted peers', async t => {
+  const f = await fixture(t), host = await f.create({waitingRoom: false}), guest = (await f.join(host)).data;
+  await f.stream(host); const guestEvents = await f.stream(guest); await f.presence(host); await f.presence(guest);
+  assert.equal((await f.command(guest, 'rotate-invitation')).status, 403);
+  const result = await f.command(host, 'rotate-invitation'); assert.equal(result.status, 200);
+  assert.notEqual(result.data.inviteKey, host.inviteKey);
+  assert.equal((await guestEvents.next('invitation-invalidated')).inviteKey, undefined);
+  assert.equal((await f.join(host)).status, 403);
+  assert.equal((await f.join({...host, inviteKey: result.data.inviteKey})).status, 201);
+  const roster = (await f.presence(guest)).data;
+  assert.equal(roster.peers.length, 1); assert.equal(JSON.stringify(roster).includes(result.data.inviteKey), false);
+});
+
+test('an in-flight former-host control cannot commit after handover', async t => {
+  const f = await fixture(t), host = await f.create({waitingRoom: false}), guest = (await f.join(host)).data;
+  await f.stream(guest); await f.presence(guest);
+  const slow = await delayedRequest(f, host, 'control');
+  await f.command(host, 'transfer-host', {participantId: guest.participantId});
+  assert.equal((await slow.finish({action: 'end'})).status, 403);
+  assert.equal((await f.command(guest, 'lock', {locked: true})).status, 200);
+});
+
+test('an in-flight invitation join cannot bypass link rotation', async t => {
+  const f = await fixture(t), host = await f.create();
+  const slow = await delayedRequest(f, host, 'join', `Invite ${host.inviteKey}`);
+  await f.command(host, 'rotate-invitation');
+  assert.equal((await slow.finish({name: 'Late guest'})).status, 403);
+});
+
+test('expired sessions fail immediately even before the maintenance sweep', async t => {
+  let now = Date.now(); const f = await fixture(t, {now: () => now, graceMs: 1000});
+  const host = await f.create(); now += 1001;
+  assert.equal((await f.request(`/${host.roomId}/ice`, undefined, f.auth(host))).status, 401);
+});
+
+test('a control body cannot commit after meeting expiration', async t => {
+  let now = Date.now(); const f = await fixture(t, {now: () => now, ttlMs: 1000});
+  const host = await f.create(), slow = await delayedRequest(f, host, 'control'); now += 1001;
+  assert.equal((await slow.finish({action: 'lock', locked: true})).status, 404);
+});
+
+test('disconnection while a signal body is pending revokes signaling rights', async t => {
+  const f = await fixture(t), host = await f.create({waitingRoom: false}), guest = (await f.join(host)).data;
+  await f.stream(host); await f.stream(guest); await f.presence(host); await f.presence(guest);
+  const slow = await delayedRequest(f, host, 'signal');
+  await f.stream(host); // Replacement stream resets joined until a fresh presence.
+  assert.equal((await slow.finish({target: guest.participantId, description: {type: 'offer', sdp: 'v=0\r\n'}})).status, 403);
+});
+
+test('TURN renewal exposes expiry and returns fresh credentials bounded by meeting lifetime', async t => {
+  let now = Date.now(); const f = await fixture(t, {now: () => now, turnSecret: 'test-only', turnUrls: ['turn:relay.example:3478']});
+  const host = await f.create(); await f.stream(host);
+  const first = (await f.request(`/${host.roomId}/ice`, undefined, f.auth(host))).data;
+  assert.ok(first.expiresAt <= now + 600000 && first.expiresAt > now + 599000);
+  now += 300000;
+  const second = (await f.request(`/${host.roomId}/ice`, undefined, f.auth(host))).data;
+  assert.ok(second.expiresAt > first.expiresAt); assert.notEqual(first.iceServers[0].credential, second.iceServers[0].credential);
+});

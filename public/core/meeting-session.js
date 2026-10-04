@@ -5,7 +5,8 @@ const slots = ['mic', 'camera', 'screen', 'screenAudio'];
 const kinds = ['audio', 'video', 'video', 'audio'];
 const randomId = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const hash = async value => btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-const stopStream = stream => stream?.getTracks().forEach(track => {track.onended = null; track.stop();});
+const stopStream = stream => stream?.getTracks().forEach(track => {track.onended = track.onmute = track.onunmute = null; track.stop();});
+const liveTrack = (stream, kind) => stream?.getTracks().find(track => track.kind === kind && track.readyState === 'live') || null;
 
 /** Four fixed RTP slots preserve camera + microphone while presenting screen + audio.
  * Reuses the workspace's permission/recovery controller; supports live or manual signaling.
@@ -27,9 +28,9 @@ export class MeetingSession extends EventTarget {
     const audio = this.media.track('audio'), video = this.media.track('video');
     return mediaState({audio: !!audio?.enabled && !audio.muted, video: !!video?.enabled && !video.muted,
       screen: !!this.screen?.getVideoTracks().some(t => t.readyState === 'live'),
-      screenAudio: !!this.screen?.getAudioTracks().some(t => t.readyState === 'live'), hand: this.hand});
+      screenAudio: !!this.screen?.getAudioTracks().some(t => t.readyState === 'live' && t.enabled && !t.muted), hand: this.hand});
   }
-  tracks() {return [this.media.track('audio'), this.media.track('video'), this.screen?.getVideoTracks()[0] || null, this.screen?.getAudioTracks()[0] || null];}
+  tracks() {return [this.media.track('audio'), this.media.track('video'), liveTrack(this.screen, 'video'), liveTrack(this.screen, 'audio')];}
   current(peer) {return !this.closed && this.peers.get(peer.id) === peer && peer.pc.signalingState !== 'closed';}
   enqueue(peer, task) {
     peer.queue = peer.queue.catch(() => {}).then(() => {if (this.current(peer)) return task();});
@@ -180,6 +181,18 @@ export class MeetingSession extends EventTarget {
     });
     return this.mediaQueue;
   }
+  updateIceServers(value) {
+    if (this.closed) throw fault('The meeting has ended.');
+    const next = iceConfiguration(value); this.iceServers = next;
+    // Refresh future gathers without interrupting healthy RTP or requesting devices.
+    // Keep all other immutable connection configuration from the original instance.
+    let failure;
+    for (const peer of this.peers.values()) if (this.current(peer)) {
+      try {peer.pc.setConfiguration({...peer.pc.getConfiguration(), iceServers: next});}
+      catch (error) {failure ||= error;}
+    }
+    if (failure) throw failure;
+  }
   setDevice(kind, enabled) {
     if (this.closed) return Promise.reject(fault('The meeting has ended.'));
     const change = enabled ? this.media.request(kind, {force: !!this.media.track(kind)?.muted}) : (this.media.release(kind), Promise.resolve());
@@ -192,11 +205,24 @@ export class MeetingSession extends EventTarget {
     if (!this.media.devicesAPI?.getDisplayMedia) throw fault('This browser cannot share its screen. You can still view presentations and use camera/audio.');
     this.sharing = true; const epoch = this.epoch;
     try {
-      // The native picker is invoked directly in the button's activation stack.
+      // The native picker is invoked directly in the button’s activation stack.
       const stream = await this.media.devicesAPI.getDisplayMedia({video: {frameRate: {ideal: 15, max: 30}}, audio});
       if (this.closed || epoch !== this.epoch) {stopStream(stream); return;}
-      const track = stream.getVideoTracks()[0]; if (!track) {stopStream(stream); throw fault('No screen was selected.');}
-      this.screen = stream; track.contentHint = 'detail'; track.onended = () => this.stopScreen().catch(e => this.report(e));
+      const track = liveTrack(stream, 'video'); if (!track) {stopStream(stream); throw fault('No screen was selected.');}
+      const sharedAudio = audio ? liveTrack(stream, 'audio') : null;
+      for (const extra of stream.getTracks()) if (extra !== track && extra !== sharedAudio) {stream.removeTrack(extra); extra.stop();}
+      this.screen = stream; track.contentHint = 'detail';
+      const changed = () => {if (this.screen === stream && !this.closed) this.syncMedia().catch(e => this.report(e));};
+      track.onended = () => {if (this.screen === stream) this.stopScreen().catch(e => this.report(e));};
+      track.onmute = track.onunmute = changed;
+      if (sharedAudio) {
+        sharedAudio.onmute = sharedAudio.onunmute = changed;
+        sharedAudio.onended = () => {
+          if (this.screen !== stream) return;
+          sharedAudio.onended = sharedAudio.onmute = sharedAudio.onunmute = null;
+          stream.removeTrack(sharedAudio); changed();
+        };
+      }
       try {await this.syncMedia();} catch (error) {await this.stopScreen(); throw error;}
     } finally {this.sharing = false;}
   }
@@ -253,7 +279,7 @@ export class MeetingSession extends EventTarget {
   directBundle(value, type) {
     if (typeof value !== 'string' || value.length > 100000) throw fault('Invalid or oversized pairing data.');
     let bundle; try {bundle = JSON.parse(value);} catch {throw fault('Paste the complete pairing JSON.');}
-    if (bundle.v !== 1 || bundle.kind !== 'veyra-direct' || ![bundle.from, bundle.to, bundle.session].every(v => ID_PATTERN.test(v || '')) ||
+    if (!bundle || typeof bundle !== 'object' || Array.isArray(bundle) || bundle.v !== 1 || bundle.kind !== 'veyra-direct' || ![bundle.from, bundle.to, bundle.session].every(v => ID_PATTERN.test(v || '')) ||
       bundle.from === bundle.to || !Number.isFinite(bundle.expiresAt) || bundle.expiresAt < Date.now() || bundle.expiresAt > Date.now() + 1800000)
       throw fault('This pairing data is invalid or expired. Create a fresh offer.');
     bundle.name = text(bundle.name, 80, 'Display name'); bundle.description = rtcSignal(bundle).description;
@@ -288,7 +314,7 @@ export class MeetingSession extends EventTarget {
   }
   async acceptAnswer(value) {
     const bundle = this.directBundle(value, 'answer'), offer = this.direct;
-    if (!offer || bundle.to !== this.id || bundle.from !== offer.to || bundle.session !== offer.session || bundle.offerHash !== offer.offerHash)
+    if (!offer || offer.expiresAt < Date.now() || bundle.expiresAt !== offer.expiresAt || bundle.to !== this.id || bundle.from !== offer.to || bundle.session !== offer.session || bundle.offerHash !== offer.offerHash)
       throw fault('This answer belongs to another pairing offer.');
     const peer = this.peers.get(bundle.from);
     if (!peer || peer.pc.signalingState !== 'have-local-offer') throw fault('This pairing offer has already been used or cancelled.');

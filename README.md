@@ -4,6 +4,12 @@ An original, framework-free collaboration workspace with a familiar desktop comm
 
 **Veyra is not Microsoft Teams, is not endorsed by Microsoft, and is not a replacement implementation of Teams’ private protocols.** It contains original application code and UI, not extracted Microsoft application code or assets. Documented interoperability is separated from Veyra’s own communication system.
 
+## No-account guest meetings
+
+Open **Guest meeting** in the workspace header or `meet.html`. Guest links, waiting-room admission, an eight-participant WebRTC mesh, independent screen/shared-audio tracks, data-channel chat, live device settings, host handover and invitation replacement are included. Static hosting also supports one-to-one manual **Direct pairing**. See [Guest P2P meetings](docs/GUEST-MEETINGS.md) for instructions and deployment boundaries.
+
+Guest meetings are separate from Microsoft Teams and private account workspaces. Automatic invitation meetings require the included HTTPS Node signaling service and suitable network/STUN/TURN configuration; GitHub Pages itself is only the static frontend. Temporary guest TURN credentials renew during meetings. Physical-device and real-world multi-network testing remain deployment acceptance tasks.
+
 ## Version 1.1 — recoverable camera and microphone setup
 
 Pre-call device tests now include a real camera preview and local microphone level meter. Denied or missing devices leave setup open with independent Retry controls; a working microphone survives a camera failure. Preview tracks transfer into the call, and receive-only joining does not require capture permissions. Live device selection, camera flipping, interruption recovery, remote playback retry, participant pinning, safe diagnostics export, and format-correct self-recording are included.
@@ -83,7 +89,7 @@ Use a reverse proxy with HTTPS. Configure environment variables explicitly; `npm
 ```sh
 cp .env.example .env
 # Edit values first, especially PUBLIC_ORIGIN and registration policy.
-node --env-file=.env --experimental-sqlite server/index.mjs
+node --env-file=.env --experimental-sqlite server/start.mjs
 ```
 
 | Variable | Meaning |

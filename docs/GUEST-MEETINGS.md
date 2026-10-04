@@ -17,11 +17,23 @@ node --env-file=.env --experimental-sqlite server/start.mjs
 
 Choose **Meeting link**, enter your name, select camera/microphone only when wanted, and create a meeting. Copy the invitation and send it through a trusted channel. Guests review the server address, enter their names, and join. The waiting room is enabled by default; the host admits guests in **People**. The host can lock/unlock new entry, remove participants, or end the meeting for everyone. Leaving is distinct from ending for everyone.
 
-Rooms are ephemeral: they expire after four hours or a server restart. A dropped connection can reconnect within two minutes with its in-memory participant capability. Refreshing/closing the tab loses that capability, including host privileges; rejoining the invitation creates a new guest. There is no host transfer or recovery account. Use **End for everyone** to revoke the room intentionally. Removing a guest revokes that session, but someone retaining the invitation can request entry again; keep the waiting room enabled or lock the meeting.
+Rooms are ephemeral: they expire after four hours or a server restart. A dropped connection can reconnect within two minutes with its in-memory participant capability. Refreshing/closing the tab loses that capability, including host privileges; rejoining the invitation creates a new guest. The host can transfer control to a connected, admitted participant using **People → Make host** before leaving. There is no recovery account or automatic host election. Use **End for everyone** to revoke the room intentionally. Removing a guest revokes that session, but someone retaining the invitation can request entry again; keep the waiting room enabled or lock the meeting.
+
+## Host controls and recovery
+
+**Make host** transfers the role atomically to one admitted participant with active signaling/media membership. The previous host immediately loses access controls. A new invitation is issued to the new host and old invitation links stop admitting new arrivals. The transfer leaves existing calls and waiting requests intact; the new host receives the waiting list. There is no remote-unmute or forced camera activation.
+
+**Replace invitation** invalidates the old invitation for future joins, without ejecting people already admitted or auto-admitting pending requests. Only the current host receives the replacement; other participants' Copy invitation buttons are disabled. **Waiting room: on/off** controls future arrivals only: existing waiting guests still require explicit admission. Old-host controls and old invitations submitted before a change cannot commit afterward, even when their HTTP request bodies arrive slowly.
+
+A stalled signaling stream is aborted after 45 seconds without incoming bytes, then reconnected with bounded backoff. The recovery bar also provides **Retry connection** and **Leave meeting**. Reconnection replaces remote peer connections without reacquiring local devices or stopping a presentation. No connection failure is represented as a successful media connection. Microphone/camera selectors and device error guidance are accessible during a meeting under **More**, as well as before joining.
+
+Server-issued guest TURN credentials include their expiry and renew at half-life (at most a five-minute interval). Fresh credentials update active peer-connection configurations and new-peer defaults without interrupting healthy media. Temporary renewal failures are shown and retried at a bounded rate; disconnecting or leaving discards stale renewal results. Operator-supplied static credentials do not acquire an inferred expiry and remain the operator's responsibility.
 
 ## Media and interaction
 
 The mesh supports **up to eight admitted participants** and sixteen additional waiting guests. Every connected pair has its own RTCPeerConnection; this is not an SFU or a large-meeting architecture. Four stable RTP slots keep microphone, camera, screen and optional shared audio separate. Starting/stopping a presentation does not replace or stop the camera or microphone. Late-joining peers receive the current tracks.
+
+Shared-audio interruption and ending update their advertised state independently; stopping only shared audio preserves the microphone, camera and presentation. Unexpected display tracks are stopped and are never transmitted.
 
 The page includes receive-only joining, camera preview, microphone meter, independent permission recovery, input device selection, camera flipping, native screen picker, participant/presentation pinning, fullscreen, raised hands, five reactions, ephemeral chat, playback retry and measured connection statistics. Chat/reactions use RTCDataChannel, not the signaling server. Messages report the number of open channels sent to; this is **not a delivery/read receipt**. Chat is memory-only, bounded to 200 displayed entries, and is not replayed to late joiners.
 

@@ -5,3 +5,12 @@
 
 body.meeting-active{height:100dvh;display:flex;flex-direction:column;overflow:hidden}.meeting-active .header,.meeting-active .notice,.meeting-active .meeting-heading,.meeting-active .meeting-toolbar{flex-shrink:0}.meeting-active main{flex:1;min-height:0}.meeting-active .meeting{height:100%;min-height:0}
 @media(max-width:800px){.more-controls>div{position:fixed;left:12px;right:12px;bottom:126px;width:auto;max-height:45vh}.meeting-heading{flex-shrink:0}}
+
+/* In-call device selection and host handover remain usable on narrow screens. */
+.recovery-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 24px;border-bottom:1px solid #dfc47e;background:#fff7e4;color:#473600}
+.recovery-bar span{flex:1 1 260px}.recovery-bar button{flex:0 0 auto}
+.person{flex-wrap:wrap}.person>span{flex:1 1 140px;overflow-wrap:anywhere}.person>button{flex:0 0 auto}
+#host-controls{display:flex;gap:8px;flex-wrap:wrap}#host-controls[hidden]{display:none}
+.more-controls>div{max-height:min(65dvh,560px);overflow-y:auto;overscroll-behavior:contain}
+.more-controls label select{width:100%;min-width:0}#live-device-status:empty{display:none}
+@media(max-width:600px){.recovery-bar{padding:12px}.person{gap:8px}.person>span{flex-basis:100%}}

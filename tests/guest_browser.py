@@ -1,6 +1,7 @@
 """Native HTTP/browser acceptance. A blocked environment is a FAILURE, never a pass.
 Uses Chromium's synthetic native camera/microphone and native getDisplayMedia picker
-with Chromium's auto-selection flag. No replacement storage, fetch, SDP, or capture API.
+with Chromium's auto-selection flag. No replacement storage, HTTP responses, SDP, or media. The reconnect scenario
+explicitly cancels a native SSE request; it does not fabricate networking.
 Run after installing Playwright: python tests/guest_browser.py
 --fixture tests the isolated guest service instead of the complete workspace server.
 """
@@ -22,6 +23,16 @@ INSTRUMENT = r'''(() => {
     const original=navigator.mediaDevices?.[method]?.bind(navigator.mediaDevices);
     if(original)navigator.mediaDevices[method]=function(options){window.__guestRequests++;return original(options).then(stream=>{window.__guestCaptures.push(...stream.getTracks());return stream;});};
   }
+  const nativeFetch=globalThis.fetch.bind(globalThis);
+  globalThis.fetch=(url,options={})=>{
+    if(String(url).endsWith('/events')){
+      const cancel=new AbortController();window.__cancelGuestStream=()=>cancel.abort();
+      if(options.signal?.aborted)cancel.abort();
+      else options.signal?.addEventListener('abort',()=>cancel.abort(),{once:true});
+      return nativeFetch(url,{...options,signal:cancel.signal});
+    }
+    return nativeFetch(url,options);
+  };
   const write=navigator.clipboard?.writeText?.bind(navigator.clipboard);
   if(write)navigator.clipboard.writeText=async value=>{await write(value);window.__lastCopied=value;};
 })();'''
@@ -105,6 +116,15 @@ try:
         guest.click('#hand');wait(host,"[...document.querySelectorAll('.tile:not(.local) .hand-marker')].some(x=>!x.hidden)")
         passed('Real data-channel chat escapes markup; raised hands propagate without broker chat storage')
         host.click('#close-panel');guest.click('#close-panel')
+        host.locator('.more-controls summary').click()
+        wait(host,"document.querySelector('#live-video-device').options.length>1")
+        selected=host.locator('#live-video-device option').nth(1).get_attribute('value')
+        previous_capture=host.evaluate('window.__guestCaptures.length')
+        host.select_option('#live-video-device',selected)
+        wait(host,f'window.__guestCaptures.length>{previous_capture}')
+        wait(guest,"document.querySelector('.tile:not(.local) video')?.videoWidth>0")
+        host.locator('.more-controls summary').click()
+        passed('In-call camera selection changes native capture and restores remote video')
         camera=host.evaluate("window.__guestPCs.find(p=>p.connectionState==='connected').getTransceivers()[1].sender.track.id")
         host.bring_to_front();host.click('#share-screen');wait(host,"document.querySelector('#share-screen').getAttribute('aria-pressed')==='true'",timeout=15000)
         wait(guest,"document.querySelector('.tile.screen:not(.local) video')?.videoWidth>0",timeout=15000)
@@ -116,13 +136,45 @@ try:
         for target in [host,guest,third]: connected(target,2)
         wait(third,"document.querySelector('.tile.screen:not(.local) video')?.videoWidth>0",timeout=15000)
         passed('Three-party mesh negotiation and late-joining presentation receiver')
+        old_peer_count=host.evaluate('window.__guestPCs.length')
+        host.evaluate('window.__cancelGuestStream()')
+        wait(host,f'window.__guestPCs.length>{old_peer_count}')
+        for target in [host,guest,third]: connected(target,2)
+        wait(guest,"document.querySelector('.tile.screen:not(.local) video')?.videoWidth>0")
+        assert host.evaluate("window.__guestPCs.find(p=>p.connectionState==='connected').getTransceivers()[1].sender.track.id")==camera
+        assert host.evaluate("window.__guestPCs.find(p=>p.connectionState==='connected').getTransceivers()[2].sender.track.readyState")=='live'
+        expect(host.locator('#connection-recovery')).not_to_be_visible()
+        passed('Native SSE interruption reconnects all peers while retaining camera and presentation tracks')
         host.click('#lock');wait(host,"document.querySelector('#lock').getAttribute('aria-pressed')==='true'")
         fourth=page(invitation);fourth.fill('#name','Locked out');fourth.click('#join');expect(fourth.locator('#notice')).to_contain_text('locked');assert fourth.locator('#setup').is_visible();fourth.close()
         passed('Host lock rejects a new participant without disturbing existing connections')
+        host.click('#lock');wait(host,"document.querySelector('#lock').getAttribute('aria-pressed')==='false'")
+        host.once('dialog',lambda dialog:dialog.accept());host.click('#waiting-policy')
+        wait(host,"document.querySelector('#waiting-policy').getAttribute('aria-pressed')==='false'")
+        immediate=page(invitation);immediate.fill('#name','Policy guest');immediate.click('#join');expect(immediate.locator('#meeting')).to_be_visible(timeout=10000)
+        connected(immediate);immediate.click('#leave');immediate.close()
+        host.click('#waiting-policy');wait(host,"document.querySelector('#waiting-policy').getAttribute('aria-pressed')==='true'")
+        passed('Waiting-room policy can be changed live without ending the meeting')
+        host.once('dialog',lambda dialog:dialog.accept());host.click('#rotate-invite')
+        host.evaluate('window.__lastCopied=null');host.click('#copy-invite');wait(host,'!!window.__lastCopied')
+        replacement=host.evaluate('window.__lastCopied');assert replacement!=invitation
+        invalid=page(invitation);invalid.fill('#name','Expired link');invalid.click('#join');expect(invalid.locator('#notice')).to_contain_text('Invalid or expired');invalid.close()
+        pending=page(replacement);pending.fill('#name','Waiting after rotation');pending.click('#join');expect(pending.locator('#waiting')).to_be_visible()
+        passed('Invitation rotation rejects old links while retaining connected participants')
+        host.once('dialog',lambda dialog:dialog.accept())
+        host.locator('#people .person').filter(has_text='Sam Rivera').get_by_role('button',name='Make host',exact=True).click()
+        expect(host.locator('#host-controls')).not_to_be_visible();expect(host.locator('#copy-invite')).to_be_disabled()
+        guest.click('#toggle-people');expect(guest.locator('#host-controls')).to_be_visible()
+        guest.locator('#waiting-list').get_by_role('button',name='Admit',exact=True).click()
+        expect(pending.locator('#meeting')).to_be_visible(timeout=10000);connected(pending)
+        pending.click('#leave');pending.close()
+        guest.click('#copy-invite');wait(guest,'!!window.__lastCopied');assert guest.evaluate('window.__lastCopied')!=replacement
+        guest.click('#close-panel')
+        passed('Host handover moves controls and waiting requests, issues a fresh invite and revokes old-host powers')
         host.click('#close-panel');screenshot(guest,'meeting-presentation.png')
         host.bring_to_front();host.click('#share-screen');wait(guest,"!document.querySelector('.tile.screen:not(.local)')")
         assert host.evaluate("window.__guestPCs.find(p=>p.connectionState==='connected').getTransceivers()[1].sender.track.readyState")=='live'
-        host.click('#toggle-people');host.once('dialog',lambda dialog:dialog.accept());host.click('#end')
+        guest.click('#toggle-people');guest.once('dialog',lambda dialog:dialog.accept());guest.click('#end')
         for target in [host,guest,third]: expect(target.locator('#ended')).to_be_visible(timeout=10000)
         assert host.evaluate("window.__guestCaptures.every(t=>t.readyState==='ended')")
         passed('Stop-sharing preserves camera; End for everyone stops every client and releases host capture')
@@ -142,6 +194,7 @@ try:
             assert workspace.locator('.guest-meeting-entry').get_attribute('href').endswith('/meet.html');workspace.close()
             passed('Existing workspace remains available with exactly one no-account meeting entry')
         assert not report['pageErrors'],report['pageErrors']
+        assert not report['screenshotErrors'],report['screenshotErrors']
         report['status']='pass';browser.close();browser=None
 except Exception as error:
     report['status']='fail';report['error']=str(error)

@@ -4,9 +4,10 @@ import {serverURL, fault} from './guest-protocol.js';
  * cookies, localStorage, referrers, or access logs. Writes are never retried implicitly.
  */
 export class GuestTransport extends EventTarget {
-  constructor(server = '', {base = globalThis.location?.href, fetch = globalThis.fetch} = {}) {
+  constructor(server = '', {base = globalThis.location?.href, fetch = globalThis.fetch, streamTimeoutMs = 45000, retryDelayMs = 500} = {}) {
     super(); this.base = serverURL(server, base); this.endpoint = new URL('api/guest-meetings', this.base);
     // Browser fetch is a Web IDL method and must retain its global receiver.
+    this.streamTimeoutMs = streamTimeoutMs; this.retryDelayMs = retryDelayMs;
     this.fetch = fetch.bind(globalThis); this.abort = new AbortController(); this.closed = false; this.connected = false;
   }
   emit(type, detail) {if (!this.closed) this.dispatchEvent(new CustomEvent(type, {detail}));}
@@ -39,9 +40,14 @@ export class GuestTransport extends EventTarget {
   async run() {
     let failures = 0;
     while (!this.closed) {
+      const attempt = new AbortController(); this.attempt = attempt;
+      const relay = () => attempt.abort(); let idleTimer;
+      this.abort.signal.addEventListener('abort', relay, {once: true});
+      const arm = () => {clearTimeout(idleTimer); idleTimer = setTimeout(() => attempt.abort(), this.streamTimeoutMs);};
+      arm();
       try {
         const response = await this.fetch(this.endpoint.href + this.path('events'), {headers: {Authorization: `Bearer ${this.session.participantToken}`, Accept: 'text/event-stream'},
-          credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store', signal: this.abort.signal});
+          credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store', signal: attempt.signal});
         if (!response.ok || !response.headers.get('content-type')?.includes('text/event-stream')) {
           const data = await response.json().catch(() => ({})); throw fault(data.error || 'Signaling is unavailable.', response.status || 502);
         }
@@ -49,7 +55,7 @@ export class GuestTransport extends EventTarget {
         const reader = response.body.getReader(), decoder = new TextDecoder(); let buffer = '';
         try {
           while (!this.closed) {
-            const {value, done} = await reader.read(); if (done) break;
+            const {value, done} = await reader.read(); if (done) break; arm();
             buffer = (buffer + decoder.decode(value, {stream: true})).replace(/\r\n/g, '\n');
             if (buffer.length > 160000) throw fault('Signaling frame is too large.');
             let end;
@@ -67,16 +73,26 @@ export class GuestTransport extends EventTarget {
       } catch (error) {
         if (this.closed) return;
         if ([401, 403, 404].includes(error.status)) {this.emit('event', {type: 'expired', message: error.message}); this.close(false); return;}
-        this.emit('error', {message: error.message});
+        if (!this.reconnectRequested) this.emit('error', {message: attempt.signal.aborted ? 'The signaling connection stopped responding.' : error.message});
+      } finally {
+        clearTimeout(idleTimer); this.abort.signal.removeEventListener('abort', relay);
+        if (this.attempt === attempt) this.attempt = null;
       }
       if (this.closed) return;
       this.connected = false; this.emit('connection', {connected: false});
-      const delay = Math.min(8000, 500 * 2 ** Math.min(failures++, 4));
+      if (this.reconnectRequested) {this.reconnectRequested = false; continue;}
+      const delay = Math.min(8000, this.retryDelayMs * 2 ** Math.min(failures++, 4));
       await new Promise(resolve => {
-        const finish = () => {clearTimeout(timer); this.abort.signal.removeEventListener('abort', finish); resolve();};
+        const finish = () => {clearTimeout(timer); this.abort.signal.removeEventListener('abort', finish); this.wakeDelay = null; this.reconnectRequested = false; resolve();};
+        this.wakeDelay = finish;
         const timer = setTimeout(finish, delay); this.abort.signal.addEventListener('abort', finish, {once: true});
       });
     }
+  }
+  reconnect() {
+    if (this.closed || !this.session) return;
+    this.reconnectRequested = true; this.attempt?.abort(); this.wakeDelay?.();
+    return this.start();
   }
   close(notify = true) {
     if (this.closed) return;

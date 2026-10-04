@@ -1,12 +1,13 @@
 import {MediaController, MicrophoneMeter} from './core/media.js';
 import {MeetingSession} from './core/meeting-session.js';
 import {GuestTransport} from './core/guest-transport.js';
+import {IceLease} from './core/ice-lease.js';
 import {guestConfig} from './guest-config.js';
 import {REACTIONS, text, parseInvitation, meetingURL, serverURL, iceConfiguration} from './core/guest-protocol.js';
 
 const $ = selector => document.querySelector(selector);
 const media = new MediaController(), abort = new AbortController();
-let transport, session, inviteLink = '', direct = false, pinned = '', lastRoster, startedAt, durationTimer, stateTimer, reactionTimer;
+let transport, session, iceLease, inviteLink = '', direct = false, pinned = '', lastRoster, startedAt, durationTimer, stateTimer, reactionTimer;
 let finished = false, starting = false, joiningMedia = false, joiningEpoch = -1, joinAgain = false, connectionEpoch = 0, mode = 'link';
 const tiles = new Map(), sinks = new Map();
 const meter = new MicrophoneMeter(level => {$('#mic-meter').value = level;});
@@ -21,6 +22,13 @@ function bind(id, fn) {
   });
 }
 function name() {if (!$('#name').reportValidity()) throw new Error('Enter your display name.'); return text($('#name').value, 80, 'Display name');}
+function setInvitation(inviteKey) {
+  if (!transport?.session) return;
+  const server = transport.base;
+  inviteLink = meetingURL(new URL('meet.html', initialURL), transport.session.roomId, inviteKey,
+    server.origin === location.origin && server.pathname === new URL('./', initialURL).pathname ? '' : server.href);
+  $('#copy-invite').disabled = false;
+}
 function initials(value) {return value.trim().split(/\s+/).slice(0, 2).map(part => [...part][0] || '').join('').toUpperCase();}
 function setMode(value) {
   mode = value; $('#link-setup').hidden = value !== 'link'; $('#direct-setup').hidden = value !== 'direct';
@@ -56,12 +64,14 @@ function updateDevices() {
   if (!session) meter.attach(media.track('audio'));
   const issues = Object.values(state).filter(s => s.issue).map(s => `${s.issue.title}. ${s.issue.detail}`);
   $('#device-status').textContent = issues.join(' ') || 'Your choices carry into the meeting. You can join with both devices off.';
+  $('#live-device-status').textContent = issues.join(' ');
+  for (const select of document.querySelectorAll('[data-input-device]')) select.value = media.preferences[select.dataset.inputDevice].deviceId || '';
   if (session) renderLocal();
 }
 media.addEventListener('change', updateDevices, {signal: abort.signal});
 media.addEventListener('devices', () => {
-  for (const kind of ['audio', 'video']) {
-    const select = $(`#${kind}-device`), value = media.preferences[kind].deviceId || '';
+  for (const select of document.querySelectorAll('[data-input-device]')) {
+    const kind = select.dataset.inputDevice, value = media.preferences[kind].deviceId || '';
     select.replaceChildren(new Option('Automatic', ''));
     for (const device of media.devices.filter(d => d.kind === `${kind}input` && d.deviceId)) select.add(new Option(device.label || `${kind} input`, device.deviceId));
     select.value = value;
@@ -74,7 +84,7 @@ for (const button of document.querySelectorAll('[data-device]')) button.addEvent
   const result = session ? session.setDevice(kind, enabled) : enabled ? media.request(kind, {force: !!track?.muted}) : (media.release(kind), Promise.resolve());
   result.catch(failure);
 });
-for (const kind of ['audio', 'video']) $(`#${kind}-device`).addEventListener('change', event => media.select(kind, event.target.value).catch(failure));
+for (const select of document.querySelectorAll('[data-input-device]')) select.addEventListener('change', event => media.select(select.dataset.inputDevice, event.target.value).catch(failure));
 bind('#flip-preview', () => media.flipCamera()); bind('#flip', () => media.flipCamera());
 $('#name').addEventListener('input', () => {$('#preview-avatar').textContent = initials($('#name').value) || 'You';});
 updateDevices(); media.refreshDevices();
@@ -92,17 +102,17 @@ async function startLink(create) {
   transport = new GuestTransport(server.href);
   try {
     const membership = create ? await transport.create(displayName, $('#title').value, $('#waiting-room').checked) : await transport.join(invitation.roomId, invitation.inviteKey, displayName);
-    inviteLink = meetingURL(new URL('meet.html', initialURL), membership.roomId, create ? membership.inviteKey : invitation.inviteKey,
-      server.origin === location.origin && server.pathname === new URL('./', initialURL).pathname ? '' : server.href);
+    setInvitation(create ? membership.inviteKey : invitation.inviteKey);
     lastRoster = membership;
     transport.addEventListener('connection', ({detail}) => {
       connectionEpoch++;
       if (!detail.connected) {
+        iceLease?.pause(); $('#connection-recovery').hidden = false;
         session?.resetPeers(); $('#connection-status').textContent = 'Signaling disconnected. Reconnecting…';
         $('#waiting-status').textContent = 'Reconnecting to the waiting room…';
       }
     });
-    transport.addEventListener('error', ({detail}) => notify(`${detail.message} Reconnecting…`, true));
+    transport.addEventListener('error', ({detail}) => {$('#connection-recovery').hidden = false; notify(`${detail.message} Reconnecting…`, true);});
     transport.addEventListener('event', ({detail}) => handleEvent(detail).catch(failure));
     $('#setup').hidden = true; $('#waiting').hidden = membership.approved;
     if (!membership.approved) notify('Waiting for host approval. Your media remains local.');
@@ -117,6 +127,11 @@ async function handleEvent(event) {
   if (['ended', 'expired', 'removed', 'left'].includes(event.type)) {
     endLocal(event.type === 'removed' ? 'The host removed you from the meeting.' : event.type === 'expired' ? 'This meeting session expired. Reopen a valid invitation to join again.' : 'The meeting has ended.'); return;
   }
+  if (event.type === 'invitation-invalidated') {
+    inviteLink = ''; $('#copy-invite').disabled = true;
+    notify('The host replaced the invitation. Existing participants stay connected. Ask the current host for the new link.'); return;
+  }
+  if (event.type === 'invitation') {setInvitation(event.inviteKey); notify('You have the new invitation. Old links no longer admit new guests.'); return;}
   if (event.type === 'signal') {if (session) await session.receive(event.from, event, event.name); return;}
   if (event.type === 'admitted') {lastRoster = {...lastRoster, approved: true}; await joinMedia(); return;}
   if (event.type === 'roster' || event.type === 'ready') {
@@ -136,15 +151,18 @@ async function joinMedia(reconnect = false) {
   try {
     const ice = await transport.ice(); if (finished || epoch !== connectionEpoch) return;
     if (!session) makeSession({id: transport.session.participantId, name: $('#name').value, iceServers: ice.iceServers, signal: (id, data) => transport.signal(id, data)});
-    else if (reconnect) {session.resetPeers(); session.iceServers = iceConfiguration(ice.iceServers);}
+    else if (reconnect) {session.resetPeers(); session.updateIceServers(ice.iceServers);}
     showMeeting(lastRoster.title);
     const roster = await transport.presence(session.state());
     if (finished || epoch !== connectionEpoch) return;
     if (roster.revision >= (lastRoster?.revision ?? -1)) lastRoster = roster;
     session.roster(lastRoster.peers); renderPeople();
+    iceLease ||= new IceLease({request: () => transport.ice(), apply: servers => session.updateIceServers(servers),
+      onError: error => notify(`Connection credential renewal failed: ${error.message} Retrying.`, true)});
+    iceLease.start(ice); $('#connection-recovery').hidden = true;
     notify(roster.host ? 'Meeting ready. Copy the invitation to invite people; waiting-room approval is controlled in People.' : 'You’ve joined. Microphone and camera use your preview choices.');
     $('#connection-status').textContent = 'Connected to meeting service · media is peer-to-peer';
-  } finally {
+  } catch (error) {$('#connection-recovery').hidden = false; throw error;} finally {
     joiningMedia = false;
     if (joinAgain && !finished && transport?.connected) queueMicrotask(() => joinMedia(!!session).catch(failure));
   }
@@ -173,7 +191,7 @@ function makeSession(options) {
   });
   session.addEventListener('stats', ({detail}) => {
     const connected = detail.filter(p => p.connection === 'connected');
-    $('#connection-status').textContent = `${connected.length + 1} connected · ${direct ? 'Direct pairing' : 'Guest meeting'}${connected.some(p => p.route === 'relay') ? ' · TURN relay in use' : connected.length ? ' · P2P media' : ' · waiting for peers'}`;
+    if (!transport || transport.connected) $('#connection-status').textContent = `${connected.length + 1} connected · ${direct ? 'Direct pairing' : 'Guest meeting'}${connected.some(p => p.route === 'relay') ? ' · TURN relay in use' : connected.length ? ' · P2P media' : ' · waiting for peers'}`;
     $('#network-stats').textContent = detail.length ? detail.map(p => `${p.name}: ${p.connection}, ${p.route} route, ${p.rttMs} ms RTT, ${p.kbps} kbps received, ${p.packetsLost} lost packets`).join('\n') : 'No remote transport connected yet.';
     if (direct && connected.length) $('#pairing').hidden = true;
   });
@@ -247,6 +265,10 @@ function personRow(person, waiting = false) {
   const label = document.createElement('span'), caption = document.createElement('small');
   label.textContent = person.name; caption.textContent = waiting ? 'Waiting for admission' : person.host ? 'Host' : person.state?.hand || person.hand ? 'Hand raised' : 'Guest'; label.append(caption); row.append(label);
   if (lastRoster?.host && person.id !== session?.id) {
+    if (!waiting && person.pc?.connectionState === 'connected') {
+      const handover = document.createElement('button'); handover.textContent = 'Make host';
+      handover.onclick = () => {if (confirm(`Make ${person.name} the host? You will lose host controls and old invitation links will be replaced.`)) transport.control('transfer-host', {participantId: person.id}).catch(failure);}; row.append(handover);
+    }
     if (waiting) {const admit = document.createElement('button'); admit.textContent = 'Admit'; admit.onclick = () => transport.control('admit', {participantId: person.id}).catch(failure); row.append(admit);}
     const remove = document.createElement('button'); remove.className = 'danger'; remove.textContent = waiting ? 'Decline' : 'Remove';
     remove.onclick = () => {if (confirm(`${waiting ? 'Decline' : 'Remove'} ${person.name}?`)) transport.control('remove', {participantId: person.id}).catch(failure);}; row.append(remove);
@@ -255,6 +277,7 @@ function personRow(person, waiting = false) {
 }
 function renderPeople() {
   if (!session) return;
+  $('#host-controls').hidden = direct || !lastRoster?.host;
   $('#people').replaceChildren(personRow({id: session.id, name: `${session.name} (you)`, host: lastRoster?.host, hand: session.hand}));
   for (const peer of session.peers.values()) $('#people').append(personRow(peer));
   $('#waiting-list').replaceChildren();
@@ -263,6 +286,8 @@ function renderPeople() {
     for (const person of lastRoster.waiting) $('#waiting-list').append(personRow(person, true));
     $('#toggle-people').textContent = `People (${lastRoster.waiting.length} waiting)`;
   } else $('#toggle-people').textContent = 'People';
+  $('#waiting-policy').setAttribute('aria-pressed', String(!!lastRoster?.waitingRoom));
+  $('#waiting-policy').textContent = lastRoster?.waitingRoom ? 'Waiting room: on' : 'Waiting room: off';
   $('#lock').setAttribute('aria-pressed', String(!!lastRoster?.locked)); $('#lock').textContent = lastRoster?.locked ? 'Unlock meeting' : 'Lock meeting';
 }
 function panel(tab) {
@@ -280,6 +305,16 @@ bind('#play-audio', async () => {
 for (const emoji of REACTIONS) {const button = document.createElement('button'); button.textContent = emoji; button.type = 'button'; button.setAttribute('aria-label', `React ${emoji}`); button.onclick = () => {try {session.react(emoji);} catch (error) {failure(error);}}; $('#reactions').append(button);}
 $('#chat-form').addEventListener('submit', event => {event.preventDefault(); try {session.sendChat($('#message').value); $('#message').value = '';} catch (error) {failure(error);}});
 $('#message').addEventListener('keydown', event => {if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {event.preventDefault(); $('#chat-form').requestSubmit();}});
+bind('#retry-connection', () => {notify('Reconnecting to the meeting service…'); transport?.reconnect();});
+bind('#leave-recovery', () => endLocal());
+bind('#waiting-policy', () => {
+  if (lastRoster.waitingRoom && !confirm('Turn off the waiting room for future arrivals? Existing waiting guests still need approval.')) return;
+  return transport.control('waiting-room', {enabled: !lastRoster.waitingRoom});
+});
+bind('#rotate-invite', async () => {
+  if (!confirm('Replace this invitation? Old links will stop working. Current participants and waiting requests are unchanged.')) return;
+  const result = await transport.control('rotate-invitation'); setInvitation(result.inviteKey);
+});
 bind('#lock', () => transport.control('lock', {locked: !lastRoster.locked}));
 bind('#end', async () => {if (confirm('End this meeting for everyone? All participants will be disconnected.')) {await transport.control('end'); endLocal('You ended the meeting for everyone.');}});
 async function copy(value, field) {
@@ -311,15 +346,19 @@ bind('#apply-answer', async () => {await session.acceptAnswer($('#answer-input')
 function endLocal(reason = 'You left the meeting. Your camera, microphone and screen capture have stopped.') {
   if (finished) return; finished = true;
   clearInterval(durationTimer); clearTimeout(stateTimer); clearTimeout(reactionTimer); abort.abort(); meter.dispose();
-  session?.stop(); media.dispose(); transport?.close();
+  iceLease?.close(); session?.stop(); media.dispose(); transport?.close();
   for (const tile of tiles.values()) {const video = tile.querySelector('video'); video.pause(); video.srcObject = null;}
   for (const sink of sinks.values()) {sink.pause(); sink.srcObject = null;}
   $('#preview').srcObject = null; $('#pairing-output').value = ''; $('#answer-input').value = ''; $('#offer-input').value = ''; $('#invite').value = '';
   document.body.classList.remove('meeting-active');
+  $('#connection-recovery').hidden = true;
   $('#setup').hidden = $('#waiting').hidden = $('#meeting').hidden = true; $('#ended').hidden = false;
   $('#ended-reason').textContent = reason; notify(''); inviteLink = ''; session = null; transport = null;
 }
-bind('#leave', () => endLocal()); bind('#cancel-wait', () => endLocal('You left the waiting room. Your preview devices have stopped.'));
+bind('#leave', () => {
+  if (lastRoster?.host && session?.peers.size && !confirm('Leave without ending the meeting? Transfer the host role in People first if others need admission or host controls. Cancel to stay.')) return;
+  endLocal();
+}); bind('#cancel-wait', () => endLocal('You left the waiting room. Your preview devices have stopped.'));
 window.addEventListener('pagehide', () => endLocal(), {once: true});
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {$('#side-panel').hidden = true; document.querySelectorAll('.more-controls[open]').forEach(el => {el.open = false;});}

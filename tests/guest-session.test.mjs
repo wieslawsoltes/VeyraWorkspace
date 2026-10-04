@@ -165,3 +165,47 @@ test('manual pairing refuses an apparently complete ICE gather with zero candida
   try {await assert.rejects(f.session.createOffer(), /No network candidates/); assert.equal(f.session.peers.size, 0);}
   finally {RTC.prototype.createOffer = old;}
 });
+
+test('ending only shared audio clears its RTP sender and advertised state without stopping presentation', async t => {
+  const f = fixture(t); await f.session.setDevice('audio', true); await f.session.setDevice('video', true);
+  f.devices.getDisplayMedia = async () => new Stream([new Track('video'), new Track('audio')]);
+  await f.session.shareScreen({audio: true}); const peer = f.session.addPeer({id: PEER});
+  const presentation = f.session.screen.getVideoTracks()[0], audio = f.session.screen.getAudioTracks()[0];
+  audio.stop(); audio.onended(); await f.session.mediaQueue;
+  assert.equal(f.session.state().screenAudio, false); assert.equal(f.session.state().screen, true);
+  assert.equal(peer.transceivers[3].sender.track, null); assert.equal(presentation.readyState, 'live');
+  assert.equal(f.media.track('audio').readyState, 'live'); assert.equal(f.media.track('video').readyState, 'live');
+});
+
+test('muted shared audio is not advertised as active and interruption handlers are cleaned up', async t => {
+  const f = fixture(t); f.devices.getDisplayMedia = async () => new Stream([new Track('video'), new Track('audio')]);
+  await f.session.shareScreen({audio: true}); const audio = f.session.screen.getAudioTracks()[0];
+  audio.muted = true; audio.onmute(); await f.session.mediaQueue; assert.equal(f.session.state().screenAudio, false);
+  audio.muted = false; audio.onunmute(); await f.session.mediaQueue; assert.equal(f.session.state().screenAudio, true);
+  await f.session.stopScreen(); assert.equal(audio.onmute, null); assert.equal(audio.onunmute, null); assert.equal(audio.onended, null);
+});
+
+test('unrequested and extra display tracks are immediately stopped rather than transmitted', async t => {
+  const f = fixture(t), wanted = new Track('video'), extraVideo = new Track('video'), unwantedAudio = new Track('audio');
+  f.devices.getDisplayMedia = async () => new Stream([wanted, extraVideo, unwantedAudio]);
+  await f.session.shareScreen(); assert.equal(extraVideo.readyState, 'ended'); assert.equal(unwantedAudio.readyState, 'ended');
+  assert.deepEqual(f.session.screen.getTracks(), [wanted]);
+});
+
+test('refreshing ICE credentials preserves healthy connections, fixed slots and hardware', async t => {
+  const f = fixture(t); await f.session.setDevice('video', true); const camera = f.media.track('video');
+  const peer = f.session.addPeer({id: PEER}); let configuration = {iceServers: [], bundlePolicy: 'max-bundle'};
+  peer.pc.getConfiguration = () => configuration; peer.pc.setConfiguration = next => {configuration = next;};
+  const input = [{urls: 'turn:relay.example', username: 'renewed', credential: 'test-only'}];
+  f.session.updateIceServers(input); input[0].credential = 'mutated';
+  assert.equal(configuration.iceServers[0].credential, 'test-only'); assert.equal(configuration.bundlePolicy, 'max-bundle');
+  assert.equal(peer.pc.restarts || 0, 0); assert.equal(camera.readyState, 'live'); assert.equal(peer.transceivers.length, 4);
+  const later = f.session.addPeer({id: 'c'.repeat(22)}); assert.equal(later.pc.config.iceServers[0].username, 'renewed');
+});
+
+test('null manual bundles and answers with altered expiration fail predictably', async t => {
+  const f = fixture(t); assert.throws(() => f.session.directBundle('null', 'offer'), /invalid or expired/);
+  const offer = JSON.parse(await f.session.createOffer());
+  const answer = {...offer, from: offer.to, to: offer.from, expiresAt: offer.expiresAt + 1, description: {type: 'answer', sdp: 'v=0\r\n'}};
+  await assert.rejects(f.session.acceptAnswer(JSON.stringify(answer)), /another pairing/);
+});
